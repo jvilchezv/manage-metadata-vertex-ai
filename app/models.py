@@ -1,8 +1,9 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 
 # ---------- Output models ----------
+
 
 class TableDescription(BaseModel):
     description: str = Field(..., min_length=0, max_length=1000)
@@ -20,6 +21,7 @@ class ModelInfo(BaseModel):
     name: str
     version: str
 
+
 class TableMetadata(BaseModel):
     table_fqn: str
     table_description: TableDescription
@@ -30,14 +32,12 @@ class TableMetadata(BaseModel):
 
 # ---------- Input model ----------
 
+
 class GenerateMetadataRequest(BaseModel):
     project: str
     dataset: str
     table: str
 
-from pydantic import BaseModel
-from typing import List, Optional
-from datetime import datetime
 
 class ColumnStatus(BaseModel):
     name: str
@@ -45,6 +45,7 @@ class ColumnStatus(BaseModel):
     mode: str
     description: Optional[str]
     is_partitioning_column: bool
+
 
 class TableStatus(BaseModel):
     table_fqn: str

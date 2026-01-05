@@ -3,8 +3,7 @@ from google.cloud import bigquery
 import logging
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 )
 
 logger = logging.getLogger(__name__)
@@ -20,30 +19,22 @@ from models import GenerateMetadataRequest, TableMetadata, TableStatus, ColumnSt
 
 app = FastAPI()
 
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-@app.get(
-    "/tables/{project}/{dataset}/{table}",
-    response_model=TableStatus
-)
+@app.get("/tables/{project}/{dataset}/{table}", response_model=TableStatus)
 def get_table_info(project: str, dataset: str, table: str):
     client = bigquery.Client()
 
     status = get_table_status(
-        client=client,
-        project=project,
-        dataset=dataset,
-        table=table
+        client=client, project=project, dataset=dataset, table=table
     )
 
     if not status.get("exists"):
-        raise HTTPException(
-            status_code=404,
-            detail="Table not found"
-        )
+        raise HTTPException(status_code=404, detail="Table not found")
 
     return status
 
@@ -53,21 +44,11 @@ def generate(request: GenerateMetadataRequest):
     try:
         client = bigquery.Client()
 
-        table_obj = get_table_metadata(
-            request.project,
-            request.dataset,
-            request.table
-        )
+        table_obj = get_table_metadata(request.project, request.dataset, request.table)
 
-        profile = build_profile(
-            table=table_obj,
-            bq_client=client
-        )
+        profile = build_profile(table=table_obj, bq_client=client)
 
-        prompt = build_prompt(
-            table=table_obj,
-            profile=profile
-        )
+        prompt = build_prompt(table=table_obj, profile=profile)
 
         payload = generate_metadata(prompt)
 
@@ -75,19 +56,13 @@ def generate(request: GenerateMetadataRequest):
         if errors:
             raise HTTPException(
                 status_code=422,
-                detail={
-                    "error": "Invalid metadata schema",
-                    "details": errors
-                }
+                detail={"error": "Invalid metadata schema", "details": errors},
             )
 
         return payload
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Unhandled error generating metadata")
-        raise HTTPException(
-            status_code=500,
-            detail="Internal server error"
-        )
+        raise HTTPException(status_code=500, detail="Internal server error")

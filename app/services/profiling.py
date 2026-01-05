@@ -6,13 +6,13 @@ from adapters.bq_reader import get_partition_field, get_max_partition
 
 logger = logging.getLogger(__name__)
 
+
 def build_profile(
     table: bigquery.Table,
     bq_client: bigquery.Client,
     max_examples: int = 10,
-    max_rows: int = 50
+    max_rows: int = 50,
 ) -> Dict[str, Dict]:
-
     fq_table = f"{table.project}.{table.dataset_id}.{table.table_id}"
     logger.info(f"Profiling table: {fq_table}")
 
@@ -21,13 +21,10 @@ def build_profile(
     job_config = None
 
     if partition_field:
-        max_partition = get_max_partition(
-            bq_client, fq_table, partition_field
-        )
+        max_partition = get_max_partition(bq_client, fq_table, partition_field)
 
         logger.info(
-            f"Using partition field '{partition_field}' "
-            f"with max value {max_partition}"
+            f"Using partition field '{partition_field}' with max value {max_partition}"
         )
 
         query = f"""
@@ -41,10 +38,12 @@ def build_profile(
             query_parameters=[
                 bigquery.ScalarQueryParameter(
                     "max_partition",
-                    "STRING" if isinstance(max_partition, str)
-                    else "TIMESTAMP" if hasattr(max_partition, "tzinfo")
+                    "STRING"
+                    if isinstance(max_partition, str)
+                    else "TIMESTAMP"
+                    if hasattr(max_partition, "tzinfo")
                     else "DATE",
-                    max_partition
+                    max_partition,
                 )
             ]
         )
@@ -59,9 +58,7 @@ def build_profile(
 
     logger.debug(f"Profiling query: {query}")
 
-    rows = list(
-        bq_client.query(query, job_config=job_config).result()
-    )
+    rows = list(bq_client.query(query, job_config=job_config).result())
 
     if not rows:
         logger.warning(f"No rows returned for table {fq_table}")
@@ -86,16 +83,10 @@ def build_profile(
             "type": field.field_type,
             "mode": field.mode,
             "example_values": list(dict.fromkeys(values))[:max_examples],
-            "null_ratio": round(
-                1 - (len(values) / max(1, len(rows))), 3
-            ),
-            "distinct_ratio": round(
-                len(set(values)) / max(1, len(values)), 3
-            )
+            "null_ratio": round(1 - (len(values) / max(1, len(rows))), 3),
+            "distinct_ratio": round(len(set(values)) / max(1, len(values)), 3),
         }
 
-    logger.info(
-        f"Profiled {len(profile)} columns for table {fq_table}"
-    )
+    logger.info(f"Profiled {len(profile)} columns for table {fq_table}")
 
     return profile

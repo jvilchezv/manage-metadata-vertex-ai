@@ -7,6 +7,7 @@ vertexai.init()
 
 model = GenerativeModel("gemini-1.5-pro")
 
+
 def generate_metadata(prompt: str, retries: int = 2) -> dict:
     last_error = None
 
