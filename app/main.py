@@ -25,7 +25,7 @@ def health():
 
 
 @app.get(
-    "/project/{project}/dataset/{dataset}/table/{table}", response_model=TableStatus
+    "/projects/{project}/datasets/{dataset}/tables/{table}", response_model=TableStatus
 )
 def get_table_info(project: str, dataset: str, table: str):
     client = bigquery.Client()
@@ -44,7 +44,8 @@ def get_table_info(project: str, dataset: str, table: str):
 
 
 @app.post(
-    "/project/{project}/dataset/{dataset}/table/{table}", response_model=TableMetadata
+    "/projects/{project}/datasets/{dataset}/tables/{table}",
+    response_model=TableMetadata,
 )
 def generate(project: str, dataset: str, table: str):
     try:
