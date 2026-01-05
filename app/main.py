@@ -8,11 +8,10 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-from adapters.bq_reader import get_table_metadata
+from adapters.bq_reader import get_table_metadata, get_table_status
 from services.profiling import build_profile
 from services.prompt_builder import build_prompt
 from adapters.vertex_llm import generate_metadata
-from adapters.bq_reader import get_table_status
 from validators.metadata_schema import validate_metadata
 from models import GenerateMetadataRequest, TableMetadata, TableStatus, ColumnStatus
 
@@ -25,12 +24,17 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/tables/{project}/{dataset}/{table}", response_model=TableStatus)
+@app.get(
+    "/project/{project}/dataset/{dataset}/table/{table}", response_model=TableStatus
+)
 def get_table_info(project: str, dataset: str, table: str):
     client = bigquery.Client()
 
     status = get_table_status(
-        client=client, project=project, dataset=dataset, table=table
+        client=client,
+        project=project.strip(),
+        dataset=dataset.strip(),
+        table=table.strip(),
     )
 
     if not status.get("exists"):
@@ -39,13 +43,14 @@ def get_table_info(project: str, dataset: str, table: str):
     return status
 
 
-@app.post("/generate-metadata", response_model=TableMetadata)
-def generate(request: GenerateMetadataRequest):
+@app.post(
+    "/project/{project}/dataset/{dataset}/table/{table}", response_model=TableMetadata
+)
+def generate(project: str, dataset: str, table: str):
     try:
         client = bigquery.Client()
 
-        table_obj = get_table_metadata(request.project, request.dataset, request.table)
-
+        table_obj = get_table_metadata(project.strip(), dataset.strip(), table.strip())
         profile = build_profile(table=table_obj, bq_client=client)
 
         prompt = build_prompt(table=table_obj, profile=profile)
