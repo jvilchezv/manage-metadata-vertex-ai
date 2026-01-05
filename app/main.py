@@ -20,14 +20,14 @@ app = FastAPI()
 
 
 @app.get("/health")
-def health():
+async def health():
     return {"status": "ok"}
 
 
 @app.get(
     "/projects/{project}/datasets/{dataset}/tables/{table}", response_model=TableStatus
 )
-def get_table_info(project: str, dataset: str, table: str):
+async def get_table_info(project: str, dataset: str, table: str) -> TableStatus:
     client = bigquery.Client()
 
     status = get_table_status(
@@ -47,7 +47,9 @@ def get_table_info(project: str, dataset: str, table: str):
     "/projects/{project}/datasets/{dataset}/tables/{table}",
     response_model=TableMetadata,
 )
-def generate_metadata_info(project: str, dataset: str, table: str):
+async def generate_metadata_info(
+    project: str, dataset: str, table: str
+) -> TableMetadata:
     try:
         client = bigquery.Client()
 
