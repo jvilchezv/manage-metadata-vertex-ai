@@ -13,7 +13,7 @@ from services.profiling import build_profile
 from services.prompt_builder import build_prompt
 from adapters.vertex_llm import generate_metadata
 from validators.metadata_schema import validate_metadata
-from models import GenerateMetadataRequest, TableMetadata, TableStatus, ColumnStatus
+from models import TableMetadata, TableStatus
 
 
 app = FastAPI()
@@ -47,7 +47,7 @@ def get_table_info(project: str, dataset: str, table: str):
     "/projects/{project}/datasets/{dataset}/tables/{table}",
     response_model=TableMetadata,
 )
-def generate(project: str, dataset: str, table: str):
+def generate_metadata_info(project: str, dataset: str, table: str):
     try:
         client = bigquery.Client()
 

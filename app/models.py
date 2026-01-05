@@ -2,8 +2,6 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
-# ---------- Output models ----------
-
 
 class TableDescription(BaseModel):
     description: str = Field(..., min_length=0, max_length=1000)
@@ -28,15 +26,6 @@ class TableMetadata(BaseModel):
     columns: List[ColumnMetadata]
     model: ModelInfo
     generated_at: datetime
-
-
-# ---------- Input model ----------
-
-
-class GenerateMetadataRequest(BaseModel):
-    project: str
-    dataset: str
-    table: str
 
 
 class ColumnStatus(BaseModel):
