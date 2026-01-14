@@ -1,22 +1,22 @@
 def build_prompt(table, profile: dict) -> str:
     """
-    Construye un prompt para que el modelo genere SOLO el JSON indicado por el contrato:
-    table: bigquery.Table - Metadatos de la tabla
-    profile: dict - Perfil de la tabla con ejemplos por columna
+    Construye un prompt para que el modelo genere SOLO el JSON indicado por el contrato.
+    - table: bigquery.Table
+    - profile: dict
     Retorna: str - Prompt formateado
     """
     fq_table = f"{table.project}.{table.dataset_id}.{table.table_id}"
 
     schema_lines = []
     for field in table.schema:
-        col_profile = profile.get(field.name, {})
+        col_profile = profile.get(field.name, {}) or {}
         examples = col_profile.get("example_values", []) or []
         examples_str = ", ".join(map(str, examples[:3])) if examples else "sin ejemplos"
-
         schema_lines.append(f"- {field.name}: {examples_str}")
 
     table_desc = (table.description or "").strip() or "Sin descripción previa"
 
+    # Nota: No usamos bloques ```json ni nada que el modelo imite
     prompt = f"""
 Eres un experto en gobierno de datos y catalogación empresarial.
 
@@ -26,7 +26,6 @@ Tu tarea es generar descripciones de NEGOCIO (no técnicas) claras y concisas.
 ========================================
 CONTEXTO
 ========================================
-
 Tabla:
 - FQN: {fq_table}
 - Descripción actual: {table_desc}
@@ -37,10 +36,8 @@ Columnas y ejemplos:
 ========================================
 SALIDA OBLIGATORIA
 ========================================
-
-Devuelve **EXCLUSIVAMENTE** un JSON válido y parseable (sin texto adicional, sin comentarios, sin Markdown)
-con la **estructura EXACTA** siguiente:
-
+Devuelve EXCLUSIVAMENTE un JSON válido y parseable (sin texto adicional, sin comentarios, sin Markdown, sin bloques de código).
+La estructura EXACTA debe ser:
 
 {{
   "table_fqn": "{fq_table}",
@@ -50,7 +47,7 @@ con la **estructura EXACTA** siguiente:
   }},
   "columns": [
     {{
-      "name": "columna",
+      "name": "nombre_de_columna_existente",
       "description": "Texto entre 300 y 700 caracteres",
       "accuracy": 0.0,
       "is_confidencial": false
@@ -66,27 +63,24 @@ con la **estructura EXACTA** siguiente:
 ========================================
 REGLAS ESTRICTAS
 ========================================
-
 - Devuelve SOLO el JSON (nada antes, nada después).
+- NO uses bloques Markdown (no uses ``` de ningún tipo).
+- NO uses comillas simples. Usa comillas dobles en todo el JSON.
+- NO agregues campos distintos a los definidos.
 - Usa ÚNICAMENTE las columnas listadas en el contexto (no inventes columnas).
-- Genera exactamente un objeto por columna.
+- Genera exactamente un objeto por cada columna del contexto, respetando el nombre exacto.
 - "accuracy" debe ser un número entre 0.0 y 1.0.
-- "is_confidencial" debe ser true si la columna contiene:
-  - Identificadores personales (nombre, email, teléfono, documento, dirección)
-  - Información sensible de negocio
-  En caso contrario, false.
-- Redacta en lenguaje de negocio (evita repetir tipos técnicos como STRING, INT64).
+- "is_confidencial" = true si la columna contiene identificadores personales (nombre, email, teléfono, documento, dirección) o información sensible de negocio; en caso contrario, false.
+- Redacta descripciones en lenguaje de negocio (evita tipos técnicos como STRING, INT64).
 - Limita todas las descripciones a máximo 1000 caracteres.
 - Si no puedes cumplir alguna regla, devuelve el JSON con:
   - table_description.description = ""
   - accuracy = 0.0
-  - columnas con accuracy = 0.0
+  - todas las columnas con accuracy = 0.0
 
 ========================================
 TAREA
 ========================================
 Con la información proporcionada, genera el JSON solicitado cumpliendo estrictamente el contrato.
-
-
 """
     return prompt

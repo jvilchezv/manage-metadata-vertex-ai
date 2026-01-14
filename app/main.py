@@ -8,12 +8,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-from adapters.bq_reader import get_table_metadata, get_table_status
-from services.profiling import build_profile
-from services.prompt_builder import build_prompt
-from adapters.vertex_llm import generate_metadata
-from validators.metadata_schema import validate_metadata
-from models import TableMetadata, TableStatus
+from app.adapters.bq_reader import get_table_metadata, get_table_status
+from app.services.profiling import build_profile
+from app.services.prompt_builder import build_prompt
+from app.adapters.vertex_llm import generate_metadata
+from app.validators.metadata_schema import validate_metadata
+from app.models import TableMetadata, TableStatus
 
 
 app = FastAPI()

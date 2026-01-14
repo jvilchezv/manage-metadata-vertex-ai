@@ -6,7 +6,7 @@ import datetime
 import json
 from decimal import Decimal
 
-from adapters.bq_reader import get_partition_field, get_max_partition
+from app.adapters.bq_reader import get_partition_field, get_max_partition
 
 logger = logging.getLogger(__name__)
 
