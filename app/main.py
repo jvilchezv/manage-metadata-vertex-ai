@@ -19,7 +19,7 @@ from models import TableMetadata, TableStatus
 app = FastAPI()
 
 
-@app.get("/health")
+@app.get("/")
 async def health():
     return {"status": "ok"}
 

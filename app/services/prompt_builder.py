@@ -46,13 +46,13 @@ con la **estructura EXACTA** siguiente:
   "table_fqn": "{fq_table}",
   "table_description": {{
     "description": "Texto entre 300 y 700 caracteres",
-    "confidence": 0.0
+    "accuracy": 0.0
   }},
   "columns": [
     {{
       "name": "columna",
       "description": "Texto entre 300 y 700 caracteres",
-      "confidence": 0.0,
+      "accuracy": 0.0,
       "is_confidencial": false
     }}
   ],
@@ -70,7 +70,7 @@ REGLAS ESTRICTAS
 - Devuelve SOLO el JSON (nada antes, nada después).
 - Usa ÚNICAMENTE las columnas listadas en el contexto (no inventes columnas).
 - Genera exactamente un objeto por columna.
-- "confidence" debe ser un número entre 0.0 y 1.0.
+- "accuracy" debe ser un número entre 0.0 y 1.0.
 - "is_confidencial" debe ser true si la columna contiene:
   - Identificadores personales (nombre, email, teléfono, documento, dirección)
   - Información sensible de negocio
@@ -79,8 +79,8 @@ REGLAS ESTRICTAS
 - Limita todas las descripciones a máximo 1000 caracteres.
 - Si no puedes cumplir alguna regla, devuelve el JSON con:
   - table_description.description = ""
-  - confidence = 0.0
-  - columnas con confidence = 0.0
+  - accuracy = 0.0
+  - columnas con accuracy = 0.0
 
 ========================================
 TAREA

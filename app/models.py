@@ -5,13 +5,13 @@ from datetime import datetime
 
 class TableDescription(BaseModel):
     description: str = Field(..., min_length=0, max_length=1000)
-    confidence: float = Field(..., ge=0.0, le=1.0)
+    accuracy: float = Field(..., ge=0.0, le=1.0)
 
 
 class ColumnMetadata(BaseModel):
     name: str
     description: str = Field(..., min_length=0, max_length=1000)
-    confidence: float = Field(..., ge=0.0, le=1.0)
+    accuracy: float = Field(..., ge=0.0, le=1.0)
     is_confidencial: bool
 
 

@@ -7,13 +7,13 @@ METADATA_SCHEMA = {
         "table_fqn": {"type": "string"},
         "table_description": {
             "type": "object",
-            "required": ["description", "confidence"]
+            "required": ["description", "accuracy"]
         },
         "columns": {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["name", "description", "confidence", "is_confidencial"]
+                "required": ["name", "description", "accuracy", "is_confidencial"]
             }
         },
         "model": {
