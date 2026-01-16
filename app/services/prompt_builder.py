@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 def build_prompt(table, profile: dict) -> str:
     """
     Construye un prompt para que el modelo genere SOLO el JSON indicado por el contrato.
@@ -6,6 +8,8 @@ def build_prompt(table, profile: dict) -> str:
     Retorna: str - Prompt formateado
     """
     fq_table = f"{table.project}.{table.dataset_id}.{table.table_id}"
+
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     schema_lines = []
     for field in table.schema:
@@ -54,10 +58,10 @@ La estructura EXACTA debe ser:
     }}
   ],
   "model": {{
-    "name": "perfilador-ml-gemini",
-    "version": "1.0.0"
+    "name": "manage-metadata-gemini",
+    "version": "gemini-2.5-pro"
   }},
-  "generated_at": "YYYY-MM-DDThh:mm:ssZ"
+  "generated_at": "{generated_at}"
 }}
 
 ========================================

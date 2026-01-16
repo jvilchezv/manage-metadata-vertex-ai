@@ -39,7 +39,7 @@ def _normalize_for_hash(value: Any) -> Any:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, (datetime.datetime, datetime.date)):
-        # Evita problemas de tz: usa ISO con 'Z' si tiene tzinfo
+      
         if isinstance(value, datetime.datetime) and value.tzinfo:
             return value.astimezone(datetime.timezone.utc).isoformat()
         return value.isoformat()
@@ -47,7 +47,6 @@ def _normalize_for_hash(value: Any) -> Any:
 
 
 def _to_display(value: Any) -> str:
-    """Representación legible y estable para example_values."""
     try:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
     except TypeError:
@@ -116,11 +115,9 @@ def build_profile(
             ]
         )
     else:
-        # Muestra aleatoria ligera; puedes reemplazar TABLESAMPLE si prefieres RAND()
         query = f"""
         SELECT *
         FROM `{fq_table}`
-        TABLESAMPLE SYSTEM (1 PERCENT)
         LIMIT {max_rows}
         """
 
