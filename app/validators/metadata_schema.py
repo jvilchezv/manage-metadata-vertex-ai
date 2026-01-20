@@ -7,24 +7,22 @@ METADATA_SCHEMA = {
         "table_fqn": {"type": "string"},
         "table_description": {
             "type": "object",
-            "required": ["description", "accuracy"]
+            "required": ["description", "accuracy"],
         },
         "columns": {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["name", "description", "accuracy", "is_confidencial"]
-            }
+                "required": ["name", "description", "accuracy", "is_confidencial"],
+            },
         },
-        "model": {
-            "type": "object",
-            "required": ["name", "version"]
-        },
-        "generated_at": {"type": "string"}
-    }
+        "model": {"type": "object", "required": ["name", "version"]},
+        "generated_at": {"type": "string"},
+    },
 }
 
 validator = Draft7Validator(METADATA_SCHEMA)
+
 
 def validate_metadata(payload: dict) -> list[str]:
     return [e.message for e in validator.iter_errors(payload)]

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+
 def build_prompt(table, profile: dict) -> str:
     """
     Construye un prompt para que el modelo genere SOLO el JSON indicado por el contrato.

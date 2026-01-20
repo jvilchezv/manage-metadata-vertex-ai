@@ -39,7 +39,6 @@ def _normalize_for_hash(value: Any) -> Any:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, (datetime.datetime, datetime.date)):
-      
         if isinstance(value, datetime.datetime) and value.tzinfo:
             return value.astimezone(datetime.timezone.utc).isoformat()
         return value.isoformat()
