@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-
+from app.adapters.vertex_llm import model
 
 def build_prompt(table, profile: dict) -> str:
     """
@@ -60,7 +60,7 @@ La estructura EXACTA debe ser:
   ],
   "model": {{
     "name": "manage-metadata-gemini",
-    "version": "gemini-2.5-pro"
+    "version": {model.version}
   }},
   "generated_at": "{generated_at}"
 }}

@@ -3,9 +3,10 @@ import time
 import vertexai
 from vertexai.generative_models import GenerativeModel
 
+model = "gemini-2.5-pro"
 vertexai.init()
 
-model = GenerativeModel("gemini-2.5-pro")
+model = GenerativeModel(model_name=model)
 
 
 def generate_metadata(prompt: str, retries: int = 2) -> dict:
