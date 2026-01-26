@@ -61,7 +61,7 @@ La estructura EXACTA debe ser:
   ],
   "model": {{
     "name": "manage-metadata-gemini",
-    "version": f"{model._model_name}"
+    "version": f"{model._model_name.split("/")[-1]}"
   }},
   "generated_at": f"{generated_at}"
 }}
