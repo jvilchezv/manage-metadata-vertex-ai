@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from app.adapters.vertex_llm import model
 
+
 def build_prompt(table, profile: dict) -> str:
     """
     Construye un prompt para que el modelo genere SOLO el JSON indicado por el contrato.
@@ -60,9 +61,9 @@ La estructura EXACTA debe ser:
   ],
   "model": {{
     "name": "manage-metadata-gemini",
-    "version": {model.version}
+    "version": f"{model._model_name}"
   }},
-  "generated_at": "{generated_at}"
+  "generated_at": f"{generated_at}"
 }}
 
 ========================================
