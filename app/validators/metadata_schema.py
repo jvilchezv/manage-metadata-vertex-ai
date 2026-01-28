@@ -20,7 +20,7 @@ METADATA_SCHEMA = {
                     "type": "object",
                     "required": ["is_sensitive", "classification"],
                     "properties": {
-                        # "is_sensitive": {"type": "string"},
+                        "is_sensitive": {"type": "boolean"},
                         "classification": {
                             "type": "string",
                             "enum": [
@@ -62,7 +62,7 @@ METADATA_SCHEMA = {
                         "type": "object",
                         "required": ["is_sensitive", "classification"],
                         "properties": {
-                            # "is_sensitive": {"type": "string"},
+                            "is_sensitive": {"type": "boolean"},
                             "classification": {
                                 "type": "string",
                                 "enum": [
