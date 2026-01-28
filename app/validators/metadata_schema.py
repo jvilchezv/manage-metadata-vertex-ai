@@ -13,14 +13,14 @@ METADATA_SCHEMA = {
                 "accuracy": {"type": "number", "minimum": 0, "maximum": 1},
                 "glossary_terms": {
                     "type": "array",
-                    "items": {"type": "string", "minLength": 1},
+                    "items": {"type": "string", "minLength": 0},
                     "uniqueItems": True,
                 },
                 "sensitivity": {
                     "type": "object",
                     "required": ["is_sensitive", "classification"],
                     "properties": {
-                        "is_sensitive": {"type": "string"},
+                        # "is_sensitive": {"type": "string"},
                         "classification": {
                             "type": "string",
                             "enum": [
@@ -62,7 +62,7 @@ METADATA_SCHEMA = {
                         "type": "object",
                         "required": ["is_sensitive", "classification"],
                         "properties": {
-                            "is_sensitive": {"type": "string"},
+                            # "is_sensitive": {"type": "string"},
                             "classification": {
                                 "type": "string",
                                 "enum": [
