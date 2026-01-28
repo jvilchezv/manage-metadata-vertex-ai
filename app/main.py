@@ -23,6 +23,7 @@ app = FastAPI(title="Metadata Generator API")
 async def health():
     return {"status": "ok"}
 
+
 @app.post(
     "/projects/{project}/datasets/{dataset}/tables/{table}",
     response_model=TableMetadata,

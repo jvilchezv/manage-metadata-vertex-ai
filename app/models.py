@@ -6,13 +6,22 @@ from datetime import datetime
 class TableDescription(BaseModel):
     description: str = Field(..., min_length=0, max_length=1000)
     accuracy: float = Field(..., ge=0.0, le=1.0)
+    glossary_terms: List[str] = Field(..., min_length=0, max_length=1000)
+
+
+class SensitivityInfo(BaseModel):
+    is_sensitive: bool
+    classification: str
+    rationale: Optional[str]
 
 
 class ColumnMetadata(BaseModel):
     name: str
     description: str = Field(..., min_length=0, max_length=1000)
     accuracy: float = Field(..., ge=0.0, le=1.0)
-    is_confidencial: bool
+    is_computed: bool
+    sensitivity: SensitivityInfo
+    glossary_terms: List[str] = Field(..., min_length=0, max_length=1000)
 
 
 class ModelInfo(BaseModel):

@@ -22,71 +22,91 @@ def build_prompt(table, profile: dict) -> str:
 
     table_desc = (table.description or "").strip() or "Sin descripción previa"
 
-    # Nota: No usamos bloques ```json ni nada que el modelo imite
     prompt = f"""
 Eres un experto en gobierno de datos y catalogación empresarial.
 
-Se te proporciona información de una tabla de BigQuery (descripción actual, columnas y ejemplos).
-Tu tarea es generar descripciones de NEGOCIO (no técnicas) claras y concisas.
+Tu tarea es ANALIZAR la tabla proporcionada y generar metadatos de NEGOCIO.
+Debes devolver únicamente un JSON VALIDO que siga EXACTAMENTE la estructura especificada.
 
-========================================
-CONTEXTO
-========================================
-Tabla:
-- FQN: {fq_table}
-- Descripción actual: {table_desc}
+==================================================
+CONTEXTO DE LA TABLA
+==================================================
+FQN: {fq_table}
+Descripción actual: {table_desc}
 
 Columnas y ejemplos:
 {chr(10).join(schema_lines)}
 
-========================================
-SALIDA OBLIGATORIA
-========================================
-Devuelve EXCLUSIVAMENTE un JSON válido y parseable (sin texto adicional, sin comentarios, sin Markdown, sin bloques de código).
-La estructura EXACTA debe ser:
+==================================================
+INSTRUCCIONES ESTRICTAS
+==================================================
+1. NO inventes columnas. Usa solo las columnas listadas arriba.
+2. NO agregues texto fuera del JSON final.
+3. NO agregues comentarios dentro del JSON (no uses // ni #).
+4. Usa SOLO comillas dobles.
+5. Usa descripciones de negocio entre 30 y 60 palabras (evita tipos técnicos como STRING, INT64).
+6. Usa los siguientes catálogos:
+   - sensitivity.classification: "Highly sensitive", "Confidential", "Internal", "Public"
+
+7. Reglas de sensibilidad:
+   - is_sensitive = true si contiene: DNI, nombre, email, teléfono, dirección, coordenadas, datos personales, financieros o confidenciales.
+   - si is_sensitive = true => classification = "Highly sensitive", "Confidential", "Internal" o "Public"
+
+8. Reglas para glossary_terms:
+   - Usa términos de negocio CORTOS y generales (ej: "Agrupación de nivel socio económico del cliente ", "Año de emisión de la carta de garantía", "Calificación RCC").
+   - No inventes términos complejos.
+   - Usa máximo 3 términos por columna si es que aplica, de lo contrario, usa una lista vacía [].
+
+9. Reglas para is_computed:
+   - true si el nombre sugiere cálculo: rate, pct, flag, total, avg, sum, count, ratio, amount_final.
+   - false si parece columna natural: id, fecha, nombres, códigos exactos, descripciones, estados, tipos, categorías, etc.
+
+10. Reglas de accuracy:
+   - número entre 0.0 y 1.0
+   - mayor si la descripción es clara por el contexto.
+
+11. Si no puedes cumplir alguna regla:
+   - table_description.description = ""
+   - table_description.accuracy = 0.0
+   - columns[*].description = ""
+   - columns[*].accuracy = 0.0
+
+
+==================================================
+FORMATO EXACTO DEL JSON DE SALIDA
+==================================================
 
 {{
   "table_fqn": "{fq_table}",
   "table_description": {{
-    "description": "Texto entre 300 y 700 caracteres",
-    "accuracy": 0.0
+    "description": "texto en 30–60 palabras",
+    "accuracy": 0.0,
+    "glossary_terms": ["term1", "term2"]
   }},
   "columns": [
     {{
-      "name": "nombre_de_columna_existente",
-      "description": "Texto entre 300 y 700 caracteres",
+      "name": "nombre_columna",
+      "description": "texto en 30–60 palabras",
       "accuracy": 0.0,
-      "is_confidencial": false
+      "is_computed": false,
+      "sensitivity": {{
+        "is_sensitive": false,
+        "classification": "Internal"
+      }},
+      "glossary_terms": ["term1", "term2"]
     }}
   ],
   "model": {{
     "name": "manage-metadata-gemini",
-    "version": f"{model._model_name.split("/")[-1]}"
+    "version": "{model._model_name.split("/")[-1]}"
   }},
-  "generated_at": f"{generated_at}"
+  "generated_at": "{generated_at}"
 }}
 
-========================================
-REGLAS ESTRICTAS
-========================================
-- Devuelve SOLO el JSON (nada antes, nada después).
-- NO uses bloques Markdown (no uses ``` de ningún tipo).
-- NO uses comillas simples. Usa comillas dobles en todo el JSON.
-- NO agregues campos distintos a los definidos.
-- Usa ÚNICAMENTE las columnas listadas en el contexto (no inventes columnas).
-- Genera exactamente un objeto por cada columna del contexto, respetando el nombre exacto.
-- "accuracy" debe ser un número entre 0.0 y 1.0.
-- "is_confidencial" = true si la columna contiene identificadores personales (nombre, email, teléfono, documento, dirección) o información sensible de negocio; en caso contrario, false.
-- Redacta descripciones en lenguaje de negocio (evita tipos técnicos como STRING, INT64).
-- Limita todas las descripciones a máximo 1000 caracteres.
-- Si no puedes cumplir alguna regla, devuelve el JSON con:
-  - table_description.description = ""
-  - accuracy = 0.0
-  - todas las columnas con accuracy = 0.0
-
-========================================
+==================================================
 TAREA
-========================================
-Con la información proporcionada, genera el JSON solicitado cumpliendo estrictamente el contrato.
+==================================================
+Genera SOLO el JSON válido según las reglas.
+
 """
     return prompt
