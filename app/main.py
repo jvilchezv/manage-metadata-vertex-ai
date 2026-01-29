@@ -24,6 +24,25 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get(
+    "/projects/{project}/datasets/{dataset}/tables/{table}", response_model=TableStatus
+)
+async def get_table_info(project: str, dataset: str, table: str) -> TableStatus:
+    client = bigquery.Client()
+
+    status = get_table_status(
+        client=client,
+        project=project.strip(),
+        dataset=dataset.strip(),
+        table=table.strip(),
+    )
+
+    if not status.get("exists"):
+        raise HTTPException(status_code=404, detail="Table not found")
+
+    return status
+
+
 @app.post(
     "/projects/{project}/datasets/{dataset}/tables/{table}",
     response_model=TableMetadata,
