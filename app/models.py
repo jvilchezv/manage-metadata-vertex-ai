@@ -12,7 +12,6 @@ class TableDescription(BaseModel):
 class SensitivityInfo(BaseModel):
     is_sensitive: bool
     classification: str
-    rationale: Optional[str]
 
 
 class ColumnMetadata(BaseModel):

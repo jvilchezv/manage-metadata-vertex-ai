@@ -16,24 +16,6 @@ METADATA_SCHEMA = {
                     "items": {"type": "string", "minLength": 0},
                     "uniqueItems": True,
                 },
-                "sensitivity": {
-                    "type": "object",
-                    "required": ["is_sensitive", "classification"],
-                    "properties": {
-                        "is_sensitive": {"type": "boolean"},
-                        "classification": {
-                            "type": "string",
-                            "enum": [
-                                "Highly sensitive",
-                                "Confidential",
-                                "Internal",
-                                "Public",
-                            ],
-                        },
-                        "rationale": {"type": "string"},
-                    },
-                    "additionalProperties": False,
-                },
             },
             "additionalProperties": False,
         },
@@ -71,8 +53,7 @@ METADATA_SCHEMA = {
                                     "Internal",
                                     "Public",
                                 ],
-                            },
-                            "rationale": {"type": "string"},
+                            }
                         },
                         "additionalProperties": False,
                     },
