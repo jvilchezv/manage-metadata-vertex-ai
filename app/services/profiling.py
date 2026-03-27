@@ -77,6 +77,22 @@ def build_profile(
     fq_table = f"{table.project}.{table.dataset_id}.{table.table_id}"
     logger.info(f"Profiling table: {fq_table}")
 
+    # Campos sin datamasking
+    schema_query = f"""
+        SELECT column_name 
+        FROM `{table.project}.{table.dataset_id}.INFORMATION_SCHEMA.COLUMNS`
+        WHERE table_name = '{table.table_id}' 
+          AND (policy_tags IS NULL OR ARRAY_LENGTH(policy_tags) = 0)
+    """
+    allowed_cols_rows = bq_client.query(schema_query).result()
+    allowed_cols = [row.column_name for row in allowed_cols_rows]
+
+    if not allowed_cols:
+        logger.error(f"No se encontraron columnas accesibles (sin datamasking) para {fq_table}")
+        return {}
+
+    cols_select_str = ", ".join([f"`{c}`" for c in allowed_cols])
+
     partition_field = get_partition_field(table)
     partition_bq_type = _get_partition_bq_type(table, partition_field)
 
@@ -84,80 +100,62 @@ def build_profile(
 
     if partition_field:
         max_partition = get_max_partition(bq_client, fq_table, partition_field)
-        logger.info(
-            f"Using partition field '{partition_field}' with max value {max_partition}"
-        )
+        logger.info(f"Usando partición '{partition_field}'. Valor base: {max_partition}")
 
-        # Determina el tipo de parámetro a partir del schema, no del valor
-        if partition_bq_type in ("TIMESTAMP",):
-            param_type = "TIMESTAMP"
-        elif partition_bq_type in ("DATE",):
-            param_type = "DATE"
-        elif partition_bq_type in ("DATETIME",):
-            param_type = "DATETIME"
+        if partition_bq_type in ("TIMESTAMP", "DATE", "DATETIME"):
+            param_type = partition_bq_type
         else:
-            # Fallback seguro
             param_type = "STRING"
 
         query = f"""
-        SELECT *
+        SELECT {cols_select_str}
         FROM `{fq_table}`
-        WHERE {partition_field} = @max_partition
+        WHERE DATE_TRUNC(CAST({partition_field} AS {param_type}), MONTH) = 
+              DATE_TRUNC(CAST(@max_partition AS {param_type}), MONTH)
         LIMIT {max_rows}
         """
 
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter(
-                    "max_partition", param_type, max_partition
-                )
+                bigquery.ScalarQueryParameter("max_partition", param_type, max_partition)
             ]
         )
     else:
-        query = f"""
-        SELECT *
-        FROM `{fq_table}`
-        LIMIT {max_rows}
-        """
+        query = f"SELECT {cols_select_str} FROM `{fq_table}` LIMIT {max_rows}"
 
     logger.debug(f"Profiling query: {query}")
 
     rows = list(bq_client.query(query, job_config=job_config).result())
 
     if not rows:
-        logger.warning(f"No rows returned for table {fq_table}")
+        logger.warning(f"No se retornaron filas para la tabla {fq_table}")
         return {}
 
-    col_names = [field.name for field in table.schema]
-    # Guardamos valores "originales" (para example_values) y también una versión normalizada
-    col_values_original: Dict[str, List[Any]] = {c: [] for c in col_names}
-    col_values_norm: Dict[str, List[Any]] = {c: [] for c in col_names}
+    # Procesamiento perfilado
+    col_values_original: Dict[str, List[Any]] = {c: [] for c in allowed_cols}
+    col_values_norm: Dict[str, List[Any]] = {c: [] for c in allowed_cols}
 
     for row in rows:
-        for c in col_names:
+        for c in allowed_cols:
             value = row[c]
-
-            # Tratamiento de "ausente"
             if _is_missing(value):
                 continue
-
-            # Limita ejemplos originales
             if len(col_values_original[c]) < max_examples:
                 col_values_original[c].append(value)
-
-            # Siempre acumula la normalización (sirve para distinct_ratio)
             col_values_norm[c].append(_normalize_for_hash(value))
 
     profile: Dict[str, Dict] = {}
-
     total_rows = max(1, len(rows))
 
+    # Solo procesamos las columnas que permitimos en el SELECT
     for field in table.schema:
         name = field.name
+        if name not in allowed_cols:
+            continue
+            
         examples = col_values_original[name]
         norm_values = col_values_norm[name]
 
-        # Deduplicación segura de ejemplos
         seen = set()
         dedup_examples_display: List[str] = []
         for v in examples:
@@ -169,26 +167,22 @@ def build_profile(
             if len(dedup_examples_display) >= max_examples:
                 break
 
-        # null_ratio: proporción de filas sin valor (None o lista vacía)
         missing_count = 0
         for row in rows:
-            v = row[name]
-            if _is_missing(v):
+            if _is_missing(row[name]):
                 missing_count += 1
+        
         null_ratio = round(missing_count / total_rows, 3)
-
-        # distinct_ratio: distintos sobre no-nulos (usando normalización)
         non_null_count = max(1, len(norm_values))
         distinct_ratio = round(len(set(norm_values)) / non_null_count, 3)
 
         profile[name] = {
             "type": field.field_type,
-            "mode": field.mode,  # REPEATED/NULLABLE/REQUIRED
+            "mode": field.mode,
             "example_values": dedup_examples_display,
             "null_ratio": null_ratio,
             "distinct_ratio": distinct_ratio,
         }
 
-    logger.info(f"Profiled {len(profile)} columns for table {fq_table}")
-
+    logger.info(f"Perfilado completado: {len(profile)} columnas para {fq_table}")
     return profile
