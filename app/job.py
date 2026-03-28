@@ -2,12 +2,12 @@
 Cloud Run Job — Batch metadata generator
 
 Variables de entorno requeridas:
-  PROJECT_ID   → proyecto de GCP  (ej: my-gcp-project)
-  DATASETS     → datasets separados por coma (ej: dataset_a,dataset_b)
+  PROJECTS        → proyectos separados por coma (ej: proy1,proy2,proy3)
 
 Variables de entorno opcionales:
-  CONCURRENCY  → tablas en paralelo (default: 10)
-  MAX_RETRIES  → reintentos por tabla en rate limit (default: 3)
+  EXCLUDE_TABLES  → tablas a excluir, separadas por coma (ej: tabla1,tabla2)
+  CONCURRENCY     → tablas en paralelo (default: 10)
+  MAX_RETRIES     → reintentos por tabla en rate limit (default: 3)
 """
 
 import asyncio
@@ -18,8 +18,9 @@ import time
 from google.cloud import bigquery
 
 from app.adapters.bq_reader import get_table_metadata
-from app.adapters.vertex_llm import generate_metadata
 from app.adapters.bq_writer import update_table_schema
+from app.adapters.dataplex_writer import update_dataplex_aspect
+from app.adapters.vertex_llm import generate_metadata
 from app.services.profiling import build_profile
 from app.services.prompt_builder import build_prompt
 from app.validators.metadata_schema import validate_metadata
@@ -31,15 +32,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Configuración ─────────────────────────────────────────────────────────────
-PROJECT_ID  = os.environ["PROJECT_ID"]
-DATASETS    = [d.strip() for d in os.environ["DATASETS"].split(",") if d.strip()]
-CONCURRENCY = int(os.getenv("CONCURRENCY", "10"))
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+PROJECTS       = [p.strip() for p in os.environ["PROJECTS"].split(",") if p.strip()]
+EXCLUDE_TABLES = [t.strip() for t in os.getenv("EXCLUDE_TABLES", "").split(",") if t.strip()]
+CONCURRENCY    = int(os.getenv("CONCURRENCY", "10"))
+MAX_RETRIES    = int(os.getenv("MAX_RETRIES", "3"))
+
+
+# ── Listar tablas via INFORMATION_SCHEMA ──────────────────────────────────────
+def list_all_tables(client: bigquery.Client, project: str) -> list[tuple[str, str, str]]:
+    """Lista todas las tablas del proyecto excluyendo las indicadas en EXCLUDE_TABLES."""
+    exclude_str = ", ".join(f"'{t}'" for t in EXCLUDE_TABLES) if EXCLUDE_TABLES else "''"
+
+    query = f"""
+        SELECT table_catalog, table_schema, table_name
+        FROM `{project}`.INFORMATION_SCHEMA.TABLES
+        WHERE table_type = 'BASE TABLE'
+          AND table_name NOT IN ({exclude_str})
+        ORDER BY table_schema, table_name
+    """
+
+    rows = client.query(query).result()
+    return [(row.table_catalog, row.table_schema, row.table_name) for row in rows]
 
 
 # ── Pipeline por tabla ────────────────────────────────────────────────────────
 def run_pipeline(project: str, dataset: str, table: str, bq_client: bigquery.Client) -> dict:
-    """Pipeline completo para una tabla: profiling → LLM → validación → escritura BQ."""
+    """Pipeline completo: profiling → LLM → validación → BQ → Dataplex."""
     table_obj = get_table_metadata(project, dataset, table)
     profile   = build_profile(table=table_obj, bq_client=bq_client)
     prompt    = build_prompt(table=table_obj, profile=profile)
@@ -49,16 +67,14 @@ def run_pipeline(project: str, dataset: str, table: str, bq_client: bigquery.Cli
     if errors:
         raise ValueError(f"Invalid metadata: {errors}")
 
+    # Escritura en paralelo: BigQuery y Dataplex
     update_table_schema(payload)
+    update_dataplex_aspect(payload)
+
     return payload
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def list_tables(client: bigquery.Client, project: str, dataset: str) -> list[tuple[str, str, str]]:
-    tables = client.list_tables(f"{project}.{dataset}")
-    return [(project, dataset, t.table_id) for t in tables]
-
-
+# ── Procesamiento por tabla ───────────────────────────────────────────────────
 async def process_table(
     project: str,
     dataset: str,
@@ -76,7 +92,7 @@ async def process_table(
                 await loop.run_in_executor(None, run_pipeline, project, dataset, table, bq_client)
                 stats["ok"] += 1
                 logger.info(f"[OK] {table_fqn}")
-                return  # éxito, salir del loop de reintentos
+                return
 
             except Exception as e:
                 error_msg = str(e)
@@ -89,30 +105,30 @@ async def process_table(
                 else:
                     stats["errors"] += 1
                     logger.error(f"[ERROR] {table_fqn} — intento {attempt}/{MAX_RETRIES}: {error_msg}")
-                    return  # agotó reintentos o error no recuperable
+                    return
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 async def main() -> None:
-    bq_client = bigquery.Client(project=PROJECT_ID)
+    bq_client = bigquery.Client()
     semaphore = asyncio.Semaphore(CONCURRENCY)
     stats     = {"ok": 0, "errors": 0}
 
-    # 1. Recolectar todas las tablas
+    # 1. Recolectar todas las tablas de todos los proyectos
     all_tables: list[tuple[str, str, str]] = []
-    for dataset in DATASETS:
+    for project in PROJECTS:
         try:
-            tables = list_tables(bq_client, PROJECT_ID, dataset)
+            tables = list_all_tables(bq_client, project)
             all_tables.extend(tables)
-            logger.info(f"Dataset {dataset}: {len(tables)} tablas encontradas")
+            logger.info(f"Proyecto {project}: {len(tables)} tablas encontradas")
         except Exception as e:
-            logger.error(f"No se pudo listar el dataset {dataset}: {e}")
+            logger.error(f"No se pudo acceder al proyecto {project}: {e}")
 
     total = len(all_tables)
     logger.info(f"Total tablas a procesar: {total}")
 
     if total == 0:
-        logger.warning("No se encontraron tablas. Verifica PROJECT_ID y DATASETS.")
+        logger.warning("No se encontraron tablas. Verifica PROJECTS y EXCLUDE_TABLES.")
         return
 
     # 2. Procesar en paralelo controlado por semáforo

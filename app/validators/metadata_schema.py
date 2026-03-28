@@ -7,15 +7,10 @@ METADATA_SCHEMA = {
         "table_fqn": {"type": "string"},
         "table_description": {
             "type": "object",
-            "required": ["description", "accuracy", "glossary_terms"],
+            "required": ["description", "accuracy"],
             "properties": {
                 "description": {"type": "string", "minLength": 0, "maxLength": 2000},
-                "accuracy": {"type": "number", "minimum": 0, "maximum": 1},
-                "glossary_terms": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 0},
-                    "uniqueItems": True,
-                },
+                "accuracy": {"type": "number", "minimum": 0, "maximum": 1}
             },
             "additionalProperties": False,
         },
@@ -28,8 +23,7 @@ METADATA_SCHEMA = {
                     "description",
                     "accuracy",
                     "is_computed",
-                    "sensitivity",
-                    "glossary_terms",
+                    "sensitivity"
                 ],
                 "properties": {
                     "name": {"type": "string", "minLength": 1},
@@ -56,12 +50,7 @@ METADATA_SCHEMA = {
                             }
                         },
                         "additionalProperties": False,
-                    },
-                    "glossary_terms": {
-                        "type": "array",
-                        "items": {"type": "string", "minLength": 0},
-                        "uniqueItems": True,
-                    },
+                    }
                 },
                 "additionalProperties": False,
             },

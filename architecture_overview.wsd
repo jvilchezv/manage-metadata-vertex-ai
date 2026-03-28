@@ -1,0 +1,141 @@
+@startuml
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Arial
+skinparam defaultFontSize 13
+skinparam ArrowColor #2E75B6
+skinparam ArrowThickness 1.5
+
+skinparam package {
+  BackgroundColor #EBF3FB
+  BorderColor #2E75B6
+  FontColor #1F4E79
+  FontStyle bold
+}
+
+skinparam component {
+  BackgroundColor #FFFFFF
+  BorderColor #2E75B6
+  FontColor #1F4E79
+}
+
+skinparam database {
+  BackgroundColor #E2EFDA
+  BorderColor #507E32
+  FontColor #1F4E79
+}
+
+skinparam actor {
+  BackgroundColor #FFF2CC
+  BorderColor #BA7517
+  FontColor #1F4E79
+}
+
+skinparam cloud {
+  BackgroundColor #F4ECFB
+  BorderColor #7B52B9
+}
+
+' ── ACTORES ──────────────────────────────────────────────
+actor "Ingeniero\nde Datos" as DevOps
+actor "Persona\naprobadora" as Approver
+
+' ── FLUJO 1: HISTÓRICO (Cloud Run Job) ──────────────────
+package "Flujo 1 — Histórico (3500 tablas)" {
+
+  component "job.py\n[Cloud Run Job]" as Job
+  component "run_pipeline()\nprofiling → LLM → validate → write" as Pipeline
+
+  note right of Job
+    Variables de entorno:
+    PROJECTS=proy1,proy2,proy3
+    EXCLUDE_TABLES=tabla1,tabla2
+    CONCURRENCY=10
+    MAX_RETRIES=3
+  end note
+}
+
+' ── FLUJO 2: 1 A 1 (API + MCP + Agent Builder) ──────────
+package "Flujo 2 — Incremental (1 a 1)" {
+
+  component "Vertex AI\nAgent Builder" as Agent
+  component "mcp_server.py\n[Cloud Run Service]" as MCP
+  component "main.py\n[Cloud Run Service]" as API
+
+  note right of API
+    GET  /projects/{p}/{d}/{t}
+    POST /projects/{p}/{d}/{t}/generate
+    POST /projects/{p}/{d}/{t}/approve
+  end note
+}
+
+' ── SERVICIOS COMPARTIDOS ────────────────────────────────
+package "Código compartido (app/)" {
+  component "bq_reader.py" as Reader
+  component "bq_writer.py" as Writer
+  component "vertex_llm.py" as LLM
+  component "profiling.py" as Profiling
+  component "prompt_builder.py" as Prompt
+  component "schema_updater.py\nvalidate + write" as Updater
+  component "dataplex_writer.py\n[NUEVO]" as DataplexWriter
+}
+
+' ── GCP SERVICIOS ────────────────────────────────────────
+cloud "Google Cloud" {
+  database "BigQuery\nproyecto1/2/3" as BQ
+  component "Vertex AI\nGemini" as Gemini
+  component "INFORMATION_SCHEMA\n(filtro de tablas)" as InfoSchema
+
+  package "Dataplex" #E8F5E9 {
+    component "Catalog\nEntry Groups" as DataplexCatalog
+    component "Aspects\n(metadata enriquecido)" as Aspects
+
+    note right of Aspects
+      Por cada tabla:
+      - table_description
+      - accuracy
+      - sensitivity
+      - is_computed
+      - model.name / version
+      - generated_at
+    end note
+  }
+}
+
+' ── RELACIONES FLUJO 1 ───────────────────────────────────
+DevOps -down-> Job : gcloud run jobs execute
+Job -down-> InfoSchema : lista tablas\nWHERE table NOT IN (...)
+InfoSchema -right-> Pipeline : 3500 tablas
+Pipeline -down-> Profiling
+Pipeline -down-> Prompt
+Pipeline -down-> LLM
+Pipeline -down-> Updater
+LLM -right-> Gemini : genera descripciones
+Updater -down-> Writer
+Writer -down-> BQ : update_table_schema()
+Updater -down-> DataplexWriter
+DataplexWriter -down-> DataplexCatalog : create_or_update_entry()
+DataplexCatalog -down-> Aspects : guarda aspects\npor tabla
+
+' ── RELACIONES FLUJO 2 ───────────────────────────────────
+Approver -down-> Agent : lenguaje natural\n(navegador GCP Console)
+Agent -down-> MCP : MCP Protocol (SSE)
+MCP -down-> API : HTTP /generate\nHTTP /approve
+API -down-> Reader : get_table_metadata()
+API -down-> Profiling
+API -down-> Prompt
+API -down-> LLM
+API -down-> Updater : solo en /approve
+LLM -right-> Gemini
+Updater -down-> Writer
+Writer -down-> BQ
+Updater -down-> DataplexWriter
+DataplexWriter -down-> DataplexCatalog
+
+' ── ARTIFACT REGISTRY ───────────────────────────────────
+component "Artifact Registry\n(imagen Docker)" as AR #FDE8D8
+Job -[dashed]-> AR : pull image
+API -[dashed]-> AR : pull image
+MCP -[dashed]-> AR : pull image
+
+@enduml

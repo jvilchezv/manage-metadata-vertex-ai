@@ -46,26 +46,21 @@ INSTRUCCIONES ESTRICTAS
 4. Usa SOLO comillas dobles.
 5. Usa descripciones de negocio entre 30 y 60 palabras (evita tipos técnicos como STRING, INT64).
 6. Usa los siguientes catálogos:
-   - sensitivity.classification: "Highly sensitive", "Confidential", "Internal", "Public"
+   - sensitivity.classification: "Highly sensitive", "Confidential", "Internal"
 
 7. Reglas de sensibilidad:
    - is_sensitive = true si contiene: DNI, nombre, email, teléfono, dirección, coordenadas, datos personales, financieros o confidenciales.
-   - si is_sensitive = true => classification = "Highly sensitive", "Confidential", "Internal" o "Public"
-
-8. Reglas para glossary_terms:
-   - Usa términos de negocio CORTOS y generales (ej: "Agrupación de nivel socio económico del cliente ", "Año de emisión de la carta de garantía", "Calificación RCC").
-   - No inventes términos complejos.
-   - Usa máximo 3 términos por columna si es que aplica, de lo contrario, usa una lista vacía [].
-
-9. Reglas para is_computed:
+   - si is_sensitive = true => classification = "Highly sensitive", "Confidential", "Internal"
+    - si is_sensitive = false => classification = "Internal"
+    
+8. Reglas para is_computed:
    - true si el nombre sugiere cálculo: rate, pct, flag, total, avg, sum, count, ratio, amount_final.
-   - false si parece columna natural: id, fecha, nombres, códigos exactos, descripciones, estados, tipos, categorías, etc.
-
-10. Reglas de accuracy:
+   
+9. Reglas de accuracy:
    - número entre 0.0 y 1.0
    - mayor si la descripción es clara por el contexto.
 
-11. Si no puedes cumplir alguna regla:
+10. Si no puedes cumplir alguna regla:
    - table_description.description = ""
    - table_description.accuracy = 0.0
    - columns[*].description = ""
@@ -80,8 +75,7 @@ FORMATO EXACTO DEL JSON DE SALIDA
   "table_fqn": "{fq_table}",
   "table_description": {{
     "description": "texto en 30–60 palabras",
-    "accuracy": 0.0,
-    "glossary_terms": ["term1", "term2"]
+    "accuracy": 0.0
   }},
   "columns": [
     {{
@@ -92,8 +86,7 @@ FORMATO EXACTO DEL JSON DE SALIDA
       "sensitivity": {{
         "is_sensitive": false,
         "classification": "Internal"
-      }},
-      "glossary_terms": ["term1", "term2"]
+      }}
     }}
   ],
   "model": {{
