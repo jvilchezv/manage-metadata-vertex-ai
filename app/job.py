@@ -19,11 +19,14 @@ from google.cloud import bigquery
 
 from app.adapters.bq_reader import get_table_metadata
 from app.adapters.bq_writer import update_table_schema
-from app.adapters.dataplex_writer import update_dataplex_aspect
+# from app.adapters.dataplex_writer import update_dataplex_aspect
 from app.adapters.vertex_llm import generate_metadata
 from app.services.profiling import build_profile
 from app.services.prompt_builder import build_prompt
 from app.validators.metadata_schema import validate_metadata
+
+# NUEVO: importar el writer de Dataplex para publicar los 3 aspects en el batch
+from app.services.dataplex_writer import upsert_dataplex_aspects
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,7 +72,27 @@ def run_pipeline(project: str, dataset: str, table: str, bq_client: bigquery.Cli
 
     # Escritura en paralelo: BigQuery y Dataplex
     update_table_schema(payload)
-    update_dataplex_aspect(payload)
+
+    # update_dataplex_aspect(payload)
+    logger.info(f"[Pipeline] BigQuery actualizado: {table_fqn}")
+
+    # ── Paso 7: Publicar en Dataplex ──────────────────────────────────────────
+    # Construye y publica los 3 Aspect Types en Dataplex Catalog.
+    # Usa el mismo payload validado, no hace ninguna transformación previa.
+    # Si falla Dataplex, se loguea el error pero NO se interrumpe el batch
+    # para no bloquear el procesamiento de las tablas restantes.
+    dataplex_result = upsert_dataplex_aspects(payload)
+
+    if dataplex_result.success:
+        logger.info(
+            f"[Pipeline] Dataplex actualizado: {table_fqn}. "
+            f"Aspects: {dataplex_result.aspects_updated}"
+        )
+    else:
+        logger.error(
+            f"[Pipeline] Dataplex falló para {table_fqn}: {dataplex_result.errors}. "
+            f"BigQuery ya fue actualizado. Dataplex puede re-intentarse luego."
+        )
 
     return payload
 

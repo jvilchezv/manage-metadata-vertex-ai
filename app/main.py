@@ -16,6 +16,9 @@ from app.validators.metadata_schema import validate_metadata
 from app.models import TableMetadata, TableStatus
 from app.services.schema_updater import update_table_metadata
 
+# NUEVO: importar el writer de Dataplex para publicar los 3 aspects en /approve
+from app.services.dataplex_writer import upsert_dataplex_aspects
+
 app = FastAPI(title="Metadata Generator API")
 
 
@@ -77,6 +80,26 @@ async def approve(project: str, dataset: str, table: str, payload: TableMetadata
     try:
         table_fqn = f"{project.strip()}.{dataset.strip()}.{table.strip()}"
         update_table_metadata(table_fqn, payload.model_dump())
+        logger.info(f"[Approve] BigQuery actualizado para: {table_fqn}")
+
+        # ── Paso 2: Publicar en Dataplex ──────────────────────────────────────
+        # Construye y publica los 3 Aspect Types en Dataplex Catalog.
+        # Usa el mismo payload aprobado, no hace ninguna transformación previa.
+        dataplex_result = upsert_dataplex_aspects(payload.model_dump())
+
+        if dataplex_result.success:
+            logger.info(
+                f"[Approve] Dataplex actualizado para: {table_fqn}. "
+                f"Aspects: {dataplex_result.aspects_updated}"
+            )
+        else:
+            # Loguear el error pero retornar 200 igual — BigQuery ya se escribió
+            # y no queremos que el usuario tenga que re-aprobar por un fallo de Dataplex.
+            # El equipo de datos puede re-publicar en Dataplex manualmente si es necesario.
+            logger.error(
+                f"[Approve] Dataplex falló para {table_fqn}: {dataplex_result.errors}"
+            )
+
         return payload
 
     except ValueError as e:
