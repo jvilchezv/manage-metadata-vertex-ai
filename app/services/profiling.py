@@ -74,12 +74,10 @@ def _build_profile_query(
 
     Retorna (query_str, job_config_o_None).
     """
-    # TABLESAMPLE no filtra filas exactas sino bloques de storage (~approx)
     sample_clause = f"TABLESAMPLE SYSTEM ({sample_percent} PERCENT)"
 
     if partition_field and partition_bq_type in ("TIMESTAMP", "DATE", "DATETIME"):
-        # Normalizar el tipo para el CAST (BigQuery acepta DATE, DATETIME, TIMESTAMP)
-        cast_type = partition_bq_type  # ya es uno de los tres válidos
+        cast_type = partition_bq_type
 
         query = f"""
         SELECT {cols_select_str}
@@ -95,7 +93,6 @@ def _build_profile_query(
         )
         return query, job_config
 
-    # Sin partición por fecha: muestreo puro
     query = f"SELECT {cols_select_str} FROM `{fq_table}` {sample_clause}"
     return query, None
 
@@ -107,9 +104,18 @@ def build_profile(
     sample_percent: int = 10,
 ) -> Dict[str, Dict]:
     """
-    Perfila una tabla BigQuery usando todos sus campos
-    y un muestreo aproximado del sample_percent de los datos del mes más reciente
-    (si la tabla tiene partición por fecha) o de toda la tabla.
+    Perfila una tabla BigQuery usando todos sus campos (incluye bq_description
+    de cada SchemaField) y un muestreo aproximado del sample_percent% de los
+    datos del mes más reciente (si la tabla tiene partición por fecha) o de
+    toda la tabla.
+
+    Retorna un dict keyed por nombre de columna con:
+        - type            : tipo BQ del campo
+        - mode            : NULLABLE / REQUIRED / REPEATED
+        - bq_description  : descripción registrada en BQ (puede ser "")
+        - example_values  : lista de strings JSON deduplicados
+        - null_ratio      : proporción de nulos/vacíos sobre total de filas
+        - distinct_ratio  : proporción de valores únicos sobre no-nulos
     """
     fq_table = f"{table.project}.{table.dataset_id}.{table.table_id}"
     logger.info(f"Profiling table: {fq_table} | sample={sample_percent}%")
@@ -199,7 +205,7 @@ def build_profile(
         profile[name] = {
             "type": field.field_type,
             "mode": field.mode,
-            "bq_description": (field.description or "").strip(),  # <-- nuevo
+            "bq_description": (field.description or "").strip(),
             "example_values": dedup_display,
             "null_ratio": null_ratio,
             "distinct_ratio": distinct_ratio,

@@ -82,7 +82,7 @@ FORMATO EXACTO DEL JSON DE SALIDA
       "name": "nombre_columna",
       "description": "texto en 30–60 palabras",
       "accuracy": 0.0,
-      "is_computed": false,
+      "is_computed": fa lse,
       "sensitivity": {{
         "is_sensitive": false,
         "classification": "Internal"
