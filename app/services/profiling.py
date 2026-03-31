@@ -178,7 +178,6 @@ def build_profile(
         norm_values = col_norm[name]
         missing_count = col_missing[name]
 
-        # Deduplicar ejemplos manteniendo orden de aparición
         seen: set = set()
         dedup_display: List[str] = []
         for v in examples:
@@ -200,6 +199,7 @@ def build_profile(
         profile[name] = {
             "type": field.field_type,
             "mode": field.mode,
+            "bq_description": (field.description or "").strip(),  # <-- nuevo
             "example_values": dedup_display,
             "null_ratio": null_ratio,
             "distinct_ratio": distinct_ratio,
