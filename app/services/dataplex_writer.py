@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # Proyecto GCP donde están creados los Aspect Types (proyecto de gobierno)
-GOVERNANCE_PROJECT = os.getenv("GOVERNANCE_PROJECT", "your-governance-project-id")
+GOVERNANCE_PROJECT = os.getenv("GOVERNANCE_PROJECT", "rs-nprd-dlk-dd-trsv-ede4")
 
 # Región de Dataplex donde está el lago y los Aspect Types
 DATAPLEX_LOCATION = os.getenv("DATAPLEX_LOCATION", "us-central1")

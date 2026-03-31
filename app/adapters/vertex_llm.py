@@ -20,8 +20,7 @@ def generate_metadata(prompt: str, retries: int = 2) -> dict:
                 model=MODEL_NAME,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.2,        # bajo para respuestas deterministas
-                    max_output_tokens=8192,
+                    temperature=0.4,        # bajo para respuestas deterministas
                     response_mime_type="application/json",
                 ),
             )
