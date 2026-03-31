@@ -5,15 +5,3 @@ google-cloud-aiplatform
 vertexai
 pydantic
 jsonschema
-
-Tu API actual          →  solo para uso incremental (tablas nuevas, 1 a 1)
-Pipeline batch separado →  para el oneshot de 3500 tablas
-
-job.py ← nuevo, punto de entrada
-schema_updater.py ← nuevo, orquesta el pipeline
-bq_writer.py ← nuevo, escribe en BQ
-bq_reader.py ← ya existía
-vertex_llm.py ← ya existía
-profiling.py ← ya existía
-prompt_builder.py ← ya existía
-metadata_schema.py ← ya existía
