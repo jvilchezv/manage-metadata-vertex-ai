@@ -6,7 +6,6 @@ from datetime import datetime
 class TableDescription(BaseModel):
     description: str = Field(..., min_length=0, max_length=1000)
     accuracy: float = Field(..., ge=0.0, le=1.0)
-    glossary_terms: List[str] = Field(..., min_length=0, max_length=1000)
 
 
 class SensitivityInfo(BaseModel):
@@ -20,7 +19,6 @@ class ColumnMetadata(BaseModel):
     accuracy: float = Field(..., ge=0.0, le=1.0)
     is_computed: bool
     sensitivity: SensitivityInfo
-    glossary_terms: List[str] = Field(..., min_length=0, max_length=1000)
 
 
 class ModelInfo(BaseModel):
