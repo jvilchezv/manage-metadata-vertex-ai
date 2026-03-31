@@ -1,29 +1,39 @@
 import json
 import time
-import vertexai
-from vertexai.generative_models import GenerativeModel
+import logging
+from google import genai
+from google.genai import types
 
-model = "gemini-2.5-pro"
-vertexai.init()
+logger = logging.getLogger(__name__)
 
-model = GenerativeModel(model_name=model)
+MODEL_NAME = "gemini-2.5-pro"
+
+client = genai.Client(vertexai=True)
 
 
 def generate_metadata(prompt: str, retries: int = 2) -> dict:
     last_error = None
 
-    for _ in range(retries + 1):
+    for attempt in range(retries + 1):
         try:
-            response = model.generate_content(prompt)
-            text = response.text.replace("```json", "").replace("```", "").strip()
-            print(f"---Debug print: {text}")
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,        # bajo para respuestas deterministas
+                    max_output_tokens=8192,
+                    response_mime_type="application/json",
+                ),
+            )
 
-            if not text.startswith("{") or not text.endswith("}"):
-                raise ValueError("LLM did not return pure JSON")
+            text = response.text.strip()
+            logger.debug(f"LLM raw response: {text}")
+
             return json.loads(text)
 
         except Exception as e:
             last_error = str(e)
+            logger.warning(f"LLM attempt {attempt + 1}/{retries + 1} failed: {last_error}")
             time.sleep(1)
 
-    raise RuntimeError(f"LLM failed after retries: {last_error}")
+    raise RuntimeError(f"LLM failed after {retries + 1} attempts: {last_error}")

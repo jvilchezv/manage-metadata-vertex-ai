@@ -9,7 +9,7 @@ METADATA_SCHEMA = {
             "type": "object",
             "required": ["description", "accuracy"],
             "properties": {
-                "description": {"type": "string", "minLength": 0, "maxLength": 2000},
+                "description": {"type": "string", "minLength": 0, "maxLength": 1000},
                 "accuracy": {"type": "number", "minimum": 0, "maximum": 1}
             },
             "additionalProperties": False,
@@ -30,27 +30,11 @@ METADATA_SCHEMA = {
                     "description": {
                         "type": "string",
                         "minLength": 0,
-                        "maxLength": 2000,
+                        "maxLength": 1000,
                     },
                     "accuracy": {"type": "number", "minimum": 0, "maximum": 1},
                     "is_computed": {"type": "boolean"},
-                    "sensitivity": {
-                        "type": "object",
-                        "required": ["is_sensitive", "classification"],
-                        "properties": {
-                            "is_sensitive": {"type": "boolean"},
-                            "classification": {
-                                "type": "string",
-                                "enum": [
-                                    "Highly sensitive",
-                                    "Confidential",
-                                    "Internal",
-                                    "Public",
-                                ],
-                            }
-                        },
-                        "additionalProperties": False,
-                    }
+                    "sensitivity": {"type": "boolean"}
                 },
                 "additionalProperties": False,
             },
