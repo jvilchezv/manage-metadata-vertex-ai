@@ -5,7 +5,7 @@ Ubicación: app/services/dataplex_writer.py
 
 Responsabilidad:
     Recibe el JSON de metadata aprobado (generado por Gemini y validado por
-    metadata_schema.py) y publica los 3 Aspect Types en Dataplex Catalog
+    metadata_schema.py) y publica los 2 Aspect Types en Dataplex Catalog
     mediante la API REST de Dataplex.
 
 ¿Qué es un Aspect en Dataplex?
@@ -14,31 +14,33 @@ Responsabilidad:
     predefinida llamada Aspect Type, que ya fue creada en el proyecto de
     gobierno de datos.
 
-Los 3 Aspect Types que se publican:
+Los 2 Aspect Types que se publican:
     1. table-description  → descripción general de la tabla
-    2. column-description → descripción de cada columna
-    3. sensibility        → clasificación de sensibilidad de datos
+    2. column-description → descripción de cada columna, incluyendo
+                            el campo 'sensitivity' (bool) por columna
+
+    NOTA: El aspect 'sensibility' fue eliminado por cambio de requerimiento.
+    La sensibilidad ahora vive dentro de cada columna en 'column-description'
+    como un campo booleano llamado 'sensitivity' (true/false).
 
 Prerequisitos:
-    - Los 3 Aspect Types ya deben existir en Dataplex (creados previamente).
+    - Los 2 Aspect Types ya deben existir en Dataplex (creados previamente).
     - Las tablas de BigQuery ya deben estar registradas en Dataplex como
       Entries (el auto-discovery de Dataplex las registra automáticamente).
     - La Service Account del proceso debe tener rol:
       roles/dataplex.catalogEditor en el proyecto de gobierno.
 
 Configuración (variables de entorno recomendadas para Cloud Run):
-    GOVERNANCE_PROJECT      → proyecto GCP donde viven los Aspect Types
-    DATAPLEX_LOCATION       → región del lago Dataplex (ej: "us-central1")
-    ASPECT_TYPE_TABLE       → ID del Aspect Type de descripción de tabla
-    ASPECT_TYPE_COLUMN      → ID del Aspect Type de descripción de columnas
-    ASPECT_TYPE_SENSIBILITY → ID del Aspect Type de sensibilidad (confirmado: "sensibility")
+    GOVERNANCE_PROJECT  → proyecto GCP donde viven los Aspect Types
+    DATAPLEX_LOCATION   → región del lago Dataplex (ej: "us-central1")
+    ASPECT_TYPE_TABLE   → ID del Aspect Type de descripción de tabla
+    ASPECT_TYPE_COLUMN  → ID del Aspect Type de descripción de columnas
 
 Flujo general:
     JSON aprobado
-        → _build_table_aspect()       → aspect tabla
-        → _build_column_aspect()      → aspect columnas
-        → _build_sensibility_aspect() → aspect sensibilidad
-        → upsert_dataplex_aspects()   → PATCH a la API de Dataplex
+        → _build_table_aspect()  → aspect tabla
+        → _build_column_aspect() → aspect columnas (con sensitivity por columna)
+        → upsert_dataplex_aspects() → PATCH a la API de Dataplex
 """
 
 import logging
@@ -70,17 +72,12 @@ GOVERNANCE_PROJECT = os.getenv("GOVERNANCE_PROJECT", "your-governance-project-id
 # Región de Dataplex donde está el lago y los Aspect Types
 DATAPLEX_LOCATION = os.getenv("DATAPLEX_LOCATION", "us-central1")
 
-# IDs de los 3 Aspect Types — deben coincidir exactamente con los creados en Dataplex
-ASPECT_TYPE_TABLE       = os.getenv("ASPECT_TYPE_TABLE",       "table-description")
-ASPECT_TYPE_COLUMN      = os.getenv("ASPECT_TYPE_COLUMN",      "column-description")
-ASPECT_TYPE_SENSIBILITY = os.getenv("ASPECT_TYPE_SENSIBILITY", "sensibility")
+# IDs de los 2 Aspect Types — deben coincidir exactamente con los creados en Dataplex
+ASPECT_TYPE_TABLE  = os.getenv("ASPECT_TYPE_TABLE",  "table-description")
+ASPECT_TYPE_COLUMN = os.getenv("ASPECT_TYPE_COLUMN", "column-description")
 
 # URL base de la API REST de Dataplex Catalog
 _DATAPLEX_API_BASE = "https://dataplex.googleapis.com/v1"
-
-# Jerarquía de clasificación de sensibilidad, ordenada de mayor a menor riesgo.
-# Se usa para determinar el nivel más restrictivo entre todas las columnas.
-_SENSITIVITY_HIERARCHY = ["Highly sensitive", "Confidential", "Internal", "Public"]
 
 
 # =============================================================================
@@ -93,7 +90,7 @@ class DataplexWriteResult:
     Resultado de la operación de upsert en Dataplex.
 
     Attributes:
-        success:          True si los 3 aspects se publicaron correctamente.
+        success:          True si los 2 aspects se publicaron correctamente.
         table_fqn:        FQN de la tabla procesada (project.dataset.table).
         entry_name:       Resource name completo del Entry en Dataplex.
         aspects_updated:  Lista de Aspect Type IDs que se actualizaron.
@@ -254,13 +251,14 @@ def _build_column_aspect(payload: dict) -> dict:
     Aspect Type: 'column-description'
 
     Mapeo desde el JSON aprobado (por cada columna en payload.columns):
-        col.name          → columns[].name
-        col.description   → columns[].description
-        col.accuracy      → columns[].accuracy
-        col.is_computed   → columns[].is_computed
+        col.name        → columns[].name
+        col.description → columns[].description
+        col.accuracy    → columns[].accuracy
+        col.is_computed → columns[].is_computed
+        col.sensitivity → columns[].sensitivity  ← bool directo (true/false)
 
-    NOTA: La sensibilidad de cada columna NO va aquí, va en el
-    Aspect 'sensibility' por separado (_build_sensibility_aspect).
+    El campo 'sensitivity' viene directamente como booleano desde Gemini,
+    sin estructura anidada.
     """
     columns = payload.get("columns", [])
 
@@ -273,71 +271,13 @@ def _build_column_aspect(payload: dict) -> dict:
                     "description": col.get("description", ""),
                     "accuracy":    col.get("accuracy", 0.0),
                     "is_computed": col.get("is_computed", False),
+                    # Sensibilidad como bool directo desde el JSON de Gemini.
+                    # El campo 'sensitivity' ya viene como true/false directamente,
+                    # no como objeto anidado con is_sensitive/classification.
+                    "sensitivity": col.get("sensitivity", False),
                 }
                 for col in columns
             ]
-        },
-    }
-
-
-def _build_sensibility_aspect(payload: dict) -> dict:
-    """
-    Construye el Aspect de sensibilidad de la tabla.
-
-    Aspect Type: 'sensibility'
-
-    Este aspect agrega la sensibilidad de todas las columnas en 3 campos:
-
-        classification:
-            El nivel de clasificación más restrictivo encontrado entre todas
-            las columnas. Usa la jerarquía definida en _SENSITIVITY_HIERARCHY:
-            "Highly sensitive" > "Confidential" > "Internal" > "Public"
-
-            Ejemplo: si una tabla tiene 10 columnas "Internal" y 1 "Confidential",
-            la tabla queda clasificada como "Confidential".
-
-        has_sensitive_columns:
-            True si al menos una columna tiene is_sensitive = True.
-
-        sensitive_columns:
-            Lista de nombres de columnas donde is_sensitive = True.
-            Útil para que los data stewards identifiquen rápidamente
-            qué columnas requieren controles de acceso.
-
-    Mapeo desde el JSON aprobado (por cada columna en payload.columns):
-        col.sensitivity.classification  → agrega para determinar el nivel más alto
-        col.sensitivity.is_sensitive    → filtra las columnas sensibles
-        col.name                        → si is_sensitive=True, se agrega a la lista
-    """
-    columns = payload.get("columns", [])
-
-    # Recolectar las clasificaciones de todas las columnas
-    classifications = [
-        col.get("sensitivity", {}).get("classification", "Public")
-        for col in columns
-    ]
-
-    # Determinar el nivel más restrictivo recorriendo la jerarquía de mayor a menor.
-    # El primer nivel que aparezca en la lista de clasificaciones es el ganador.
-    top_classification = "Public"
-    for level in _SENSITIVITY_HIERARCHY:
-        if level in classifications:
-            top_classification = level
-            break
-
-    # Columnas que el LLM identificó como sensibles
-    sensitive_columns = [
-        col["name"]
-        for col in columns
-        if col.get("sensitivity", {}).get("is_sensitive", False)
-    ]
-
-    return {
-        "aspectType": _aspect_type_resource(ASPECT_TYPE_SENSIBILITY),
-        "data": {
-            "classification":        top_classification,
-            "has_sensitive_columns": len(sensitive_columns) > 0,
-            "sensitive_columns":     sensitive_columns,
         },
     }
 
@@ -348,10 +288,10 @@ def _build_sensibility_aspect(payload: dict) -> dict:
 
 def upsert_dataplex_aspects(payload: dict) -> DataplexWriteResult:
     """
-    Publica los 3 Aspect Types en Dataplex para una tabla de BigQuery.
+    Publica los 2 Aspect Types en Dataplex para una tabla de BigQuery.
 
     Recibe el JSON aprobado (output de Gemini validado por metadata_schema.py),
-    construye los 3 aspects y hace un único PATCH a la API de Dataplex.
+    construye los 2 aspects y hace un único PATCH a la API de Dataplex.
 
     La operación es un UPSERT: si los aspects ya existen los sobreescribe,
     si no existen los crea. El parámetro updateMask="aspects" garantiza que
@@ -412,14 +352,13 @@ def upsert_dataplex_aspects(payload: dict) -> DataplexWriteResult:
     }
 
     # -------------------------------------------------------------------------
-    # Paso 4: Construir el body con los 3 aspects
+    # Paso 4: Construir el body con los 2 aspects
     # -------------------------------------------------------------------------
     # Cada key del dict 'aspects' es el resource name completo del Aspect Type.
     # La API requiere este formato completo, no solo el ID corto.
     aspects_body = {
-        _aspect_type_resource(ASPECT_TYPE_TABLE):       _build_table_aspect(payload),
-        _aspect_type_resource(ASPECT_TYPE_COLUMN):      _build_column_aspect(payload),
-        _aspect_type_resource(ASPECT_TYPE_SENSIBILITY): _build_sensibility_aspect(payload),
+        _aspect_type_resource(ASPECT_TYPE_TABLE):  _build_table_aspect(payload),
+        _aspect_type_resource(ASPECT_TYPE_COLUMN): _build_column_aspect(payload),
     }
 
     # -------------------------------------------------------------------------
@@ -445,7 +384,6 @@ def upsert_dataplex_aspects(payload: dict) -> DataplexWriteResult:
         aspects_updated = [
             ASPECT_TYPE_TABLE,
             ASPECT_TYPE_COLUMN,
-            ASPECT_TYPE_SENSIBILITY,
         ]
         logger.info(
             f"[Dataplex] Upsert exitoso para {table_fqn}. "
