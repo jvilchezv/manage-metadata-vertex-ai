@@ -1,17 +1,14 @@
-from datetime import datetime, timezone
-from app.adapters.vertex_llm import MODEL_NAME
-
 DOMAIN_CONTEXT = """
 ==================================================
-CONTEXTO DE DOMINIO
+CONTEXTO DE DOMINIO (SOLO PARA DESAMBIGUAR NOMBRES)
 ==================================================
-La tabla pertenece a Rímac Seguros, compañía de seguros del Perú.
+La tabla pertenece a Rímac Seguros (Perú).
 Los datos pueden corresponder a: pólizas, siniestros, asegurados,
 primas, coberturas, endosos, productos de salud, vida o vehicular.
 
 Usa este contexto SOLO para interpretar nombres de columna ambiguos.
-NO asumas procesos, sistemas ni usos de negocio que no estén
-evidenciados en los ejemplos o nombres de columna.
+NO asumas procesos, sistemas, eventos, estados, ni usos de negocio
+que no estén evidenciados explícitamente en el esquema, desc_bq o ejemplos.
 ==================================================
 """
 
@@ -24,21 +21,22 @@ def build_prompt(table, profile: dict) -> str:
     Retorna: str - Prompt formateado
     """
     fq_table = f"{table.project}.{table.dataset_id}.{table.table_id}"
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    table_desc = (table.description or "").strip() or "Sin descripción previa"
 
     schema_lines = []
     for field in table.schema:
-        col_profile    = profile.get(field.name, {}) or {}
-        examples       = col_profile.get("example_values", []) or []
-        null_ratio     = col_profile.get("null_ratio", None)
-        dist_ratio     = col_profile.get("distinct_ratio", None)
-        bq_description = col_profile.get("bq_description", "").strip()
+        col_profile = profile.get(field.name, {}) or {}
+
+        examples = col_profile.get("example_values", []) or []
+        null_ratio = col_profile.get("null_ratio", None)
+        dist_ratio = col_profile.get("distinct_ratio", None)
+        bq_description = (col_profile.get("bq_description", "") or "").strip()
 
         examples_str = ", ".join(map(str, examples[:3])) if examples else "sin ejemplos"
-        null_str     = f"{null_ratio:.0%} nulos"     if null_ratio is not None else ""
-        dist_str     = f"{dist_ratio:.0%} distintos" if dist_ratio is not None else ""
-        stats_str    = " | ".join(filter(None, [null_str, dist_str]))
-        desc_str     = f' | desc_bq: "{bq_description}"' if bq_description else ""
+        null_str = f"{null_ratio:.0%} nulos" if null_ratio is not None else ""
+        dist_str = f"{dist_ratio:.0%} distintos" if dist_ratio is not None else ""
+        stats_str = " | ".join(filter(None, [null_str, dist_str]))
+        desc_str = f' | desc_bq: "{bq_description}"' if bq_description else ""
 
         schema_lines.append(
             f"- {field.name} [{field.field_type}, {field.mode}]"
@@ -47,11 +45,11 @@ def build_prompt(table, profile: dict) -> str:
             f" | ejemplos: {examples_str}"
         )
 
-    table_desc = (table.description or "").strip() or "Sin descripción previa"
-
     prompt = f"""
-Eres un catalogador de datos. Tu única fuente de información es el esquema
-y el perfilamiento estadístico que se te entrega a continuación.
+Eres un experto en gobierno de datos y catalogación empresarial.
+
+Tu tarea es ANALIZAR la tabla proporcionada y generar metadatos de NEGOCIO.
+Debes devolver únicamente un JSON VALIDO que siga EXACTAMENTE la estructura especificada.
 
 ==================================================
 CONTEXTO DE LA TABLA
@@ -59,94 +57,128 @@ CONTEXTO DE LA TABLA
 FQN            : {fq_table}
 Descripción BQ : {table_desc}
 
-Columnas (tipo, modo, estadísticas, ejemplos de valores reales):
+Columnas (tipo, modo, estadísticas, desc_bq y ejemplos reales):
 {chr(10).join(schema_lines)}
 
 {DOMAIN_CONTEXT}
 
 ==================================================
-REGLAS DE DESCRIPCIÓN — LEE CON ATENCIÓN
+ACLARACIONES DE ALCANCE (CRÍTICAS)
 ==================================================
-A. Describe SOLO lo que los nombres de columna, tipos y ejemplos demuestran
-   de forma directa. Si el dato no está en el perfilamiento, no lo menciones.
+- Las tablas pueden representar información transversal del negocio de salud,
+  pero NO se debe asumir pertenencia exclusiva a un producto, póliza o régimen.
+- Campos de tipo código o identificador representan valores opacos cuyo
+  significado depende de tablas maestras externas NO provistas.
+- NO infieras estados, vigencia, clasificación, condición ni significado
+  desde valores constantes o letras individuales (por ejemplo: "S", "N", "V").
+- Si una columna no tiene evidencia suficiente, debe quedar SIN descripción.
 
-B. PROHIBIDO usar sin excepción:
-   - Lenguaje especulativo: "podría", "parece", "probablemente", "sugiere",
-     "posiblemente", "se podría usar", "indica que", "aparentemente".
-   - Afirmaciones de uso o propósito del sistema: "esta tabla se usa en",
-     "permite analizar", "es utilizada por", "se emplea para".
-   - Frases vacías: "almacena información relevante", "contiene datos importantes".
+==================================================
+REGLAS ESTRICTAS (NO NEGOCIABLES)
+==================================================
 
-C. Las descripciones deben ser afirmaciones factuales directas sobre
-   QUÉ CONTIENE la columna o tabla. No describas para QUÉ SIRVE.
-      "Registra el identificador único de la póliza en formato alfanumérico."
-      "Esta columna podría usarse para rastrear pólizas en sistemas analíticos."
+1) EVIDENCIA ÚNICAMENTE
+Describe SOLO lo que se demuestra de forma directa mediante:
+- nombre de columna
+- tipo y modo
+- desc_bq (si existe)
+- estadísticas (nulos/distintos)
+- ejemplos reales
+Si algo no está explícitamente evidenciado, NO lo menciones.
 
-D. Columnas con null_ratio >= 0.50:
-   - La descripción DEBE terminar con la frase:
-     "Campo con alta tasa de nulos; su población aplica a casos específicos."
-   - Esto es una observación factual del perfilamiento, no una suposición.
+2) PROHIBIDO ABSOLUTAMENTE
+a) Lenguaje especulativo o interpretativo:
+   "podría", "parece", "probablemente", "posiblemente", "sugiere",
+   "aparentemente", "indica que", "significa", "representa un estado".
+b) Función, propósito o rol implícito (aunque no use verbos de uso):
+   "sirve como", "permite", "confirma su función", "para control",
+   "para seguimiento", "para análisis", "metadato de auditoría".
+c) Inferencias de negocio no evidenciadas:
+   EPS, cliente activo/inactivo, broker, afiliación, cobertura, continuidad,
+   segmentación comercial, estado contractual.
+d) Frases vacías:
+   "información relevante", "datos importantes", "registro completo".
 
-E. Si los ejemplos o el nombre no son suficientes para describir la columna
-   con certeza → description = "" y accuracy = 0.0. No inventes, no supongas.
+3) TOQUE DE NEGOCIO SIN USO
+Las descripciones deben responder únicamente:
+¿QUÉ ES ESTE DATO?
+NO responder:
+¿PARA QUÉ SIRVE?, ¿QUÉ PERMITE?, ¿CÓMO SE USA?
 
-F. Si una columna tiene desc_bq, úsala como base factual para redactar la
-   description. Puedes reformularla para cumplir el límite de palabras,
-   pero no la contradigas ni la extiendas con suposiciones.
-   Si desc_bq está ausente, describe solo desde el nombre y los ejemplos.
+4) AMBIGÜEDAD
+Si describir el campo requiere interpretación, hipótesis o alternativas:
+→ description = ""
+→ accuracy = 0.0
+Sin excepciones. No rellenes.
 
-G. Longitud: entre 40 y 60 palabras por descripción (límite 1000 caracteres). 
-   Sin tipos técnicos (STRING, INT64, FLOAT, etc.).
+5) USO DE desc_bq
+Si desc_bq está presente:
+- úsala como base factual
+- puedes reformular para cumplir longitud
+
+6) NULOS ALTOS
+Si null_ratio >= 0.50 (solo para campos), la descripción debe terminar EXACTAMENTE con:
+"Utilizada principalmente para segmentos u agrupaciones específicas."
+
+No expliques causas ni contexto.
+
+7) ESTILO Y LONGITUD
+- Tabla: 40–80 palabras (máx. 100).
+- Columna: 20–50 palabras (máx. 80).
+- Si NO alcanzas el mínimo con evidencia, deja description = "".
+- Español neutro, factual, sin adjetivos valorativos.
+- No incluir tipos técnicos (STRING, INT64, etc.).
+
+8) COBERTURA
+Genera exactamente UNA entrada por cada columna listada,
+usando el mismo nombre y sin duplicados.
 
 ==================================================
 REGLAS DE METADATOS
 ==================================================
 sensitivity:
-  - true  si la columna contiene: nombre, email, teléfono, dirección,
-    coordenadas, DNI/documento de identidad, datos financieros o bancarios.
-  - false en cualquier otro caso.
+- true  si el contenido demuestra datos personales o sensibles
+  (nombre, documento, contacto, dirección, datos financieros).
+- false en cualquier otro caso.
 
 is_computed:
-  - true si el nombre contiene alguno de estos términos: rate, pct, flag,
-    total, avg, sum, count, ratio, amount_final, o cualquier otro que denote
-    un valor derivado de un cálculo.
-  - false en cualquier otro caso.
+- true  si el nombre indica valor derivado:
+  rate, pct, flag, total, avg, sum, count, ratio, amount_final.
+- false en cualquier otro caso.
 
-accuracy — escala fija, elige el valor más cercano:
-  - 1.0 : nombre + desc_bq + ejemplos describen el contenido inequívocamente.
-  - 0.8 : desc_bq presente pero ejemplos escasos o ambiguos.
-  - 0.7 : sin desc_bq, nombre claro y ejemplos suficientes.
-  - 0.4 : sin desc_bq, solo se puede inferir parcialmente del nombre.
-  - 0.0 : sin certeza suficiente → description debe ser "".
+accuracy — escala fija
+- 1.0 : evidencia completa e inequívoca
+- 0.8 : desc_bq clara, ejemplos limitados
+- 0.7 : nombre claro + ejemplos suficientes
+- 0.4 : inferencia parcial
+- 0.0 : ambigüedad → description vacío
 
 ==================================================
-FORMATO EXACTO DEL JSON DE SALIDA
+FORMATO EXACTO (JSON ESTRICTO)
 ==================================================
+Devuelve SOLO JSON válido.
+Sin markdown, sin texto adicional, sin comentarios.
+
 {{
   "table_fqn": "{fq_table}",
   "table_description": {{
-    "description": "texto entre 20 y 50 palabras",
+    "description": "texto",
     "accuracy": 0.0
   }},
   "columns": [
     {{
       "name": "nombre_columna",
-      "description": "texto entre 20 y 50 palabras",
+      "description": "texto",
       "accuracy": 0.0,
       "is_computed": false,
       "sensitivity": false
     }}
-  ],
-  "model": {{
-    "name": "manage-metadata-gemini",
-    "version": "{MODEL_NAME}"
-  }},
-  "generated_at": "{generated_at}"
+  ]
 }}
 
 ==================================================
 TAREA
 ==================================================
-Devuelve ÚNICAMENTE el JSON. Sin explicaciones, sin markdown, sin comentarios.
+Devuelve ÚNICAMENTE el JSON. Nada más.
 """
     return prompt

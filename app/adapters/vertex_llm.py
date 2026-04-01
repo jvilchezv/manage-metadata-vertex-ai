@@ -3,6 +3,7 @@ import time
 import logging
 from google import genai
 from google.genai import types
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -20,15 +21,24 @@ def generate_metadata(prompt: str, retries: int = 2) -> dict:
                 model=MODEL_NAME,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.4,        # bajo para respuestas deterministas
+                    temperature=0.4,
                     response_mime_type="application/json",
                 ),
             )
 
-            text = response.text.strip()
-            logger.debug(f"LLM raw response: {text}")
+            raw_text = response.text.strip()
 
-            return json.loads(text)
+            data = json.loads(raw_text)
+
+            data["model"] = {
+                "name": "manage-metadata-gemini",
+                "version": MODEL_NAME
+            }
+            data["generated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            print(data["generated_at"])
+            logger.debug(f"LLM raw response: {data}")
+
+            return data
 
         except Exception as e:
             last_error = str(e)
