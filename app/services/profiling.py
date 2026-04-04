@@ -101,48 +101,22 @@ def build_profile(
     table: bigquery.Table,
     bq_client: bigquery.Client,
     max_examples: int = 10,
-    sample_percent: int = 10,
+    sample_percent: int = 5,
 ) -> Dict[str, Dict]:
-    """
-    Perfila una tabla BigQuery usando todos sus campos (incluye bq_description
-    de cada SchemaField) y un muestreo aproximado del sample_percent% de los
-    datos del mes más reciente (si la tabla tiene partición por fecha) o de
-    toda la tabla.
-
-    Retorna un dict keyed por nombre de columna con:
-        - type            : tipo BQ del campo
-        - mode            : NULLABLE / REQUIRED / REPEATED
-        - bq_description  : descripción registrada en BQ (puede ser "")
-        - example_values  : lista de strings JSON deduplicados
-        - null_ratio      : proporción de nulos/vacíos sobre total de filas
-        - distinct_ratio  : proporción de valores únicos sobre no-nulos
-    """
     fq_table = f"{table.project}.{table.dataset_id}.{table.table_id}"
     logger.info(f"Profiling table: {fq_table} | sample={sample_percent}%")
 
     all_cols = [f.name for f in table.schema]
-
     if not all_cols:
-        logger.error(f"El schema de {fq_table} está vacío.")
         return {}
 
     cols_select_str = ", ".join([f"`{c}`" for c in all_cols])
-
     partition_field = get_partition_field(table)
     partition_bq_type = _get_partition_bq_type(table, partition_field)
     max_partition = None
 
     if partition_field and partition_bq_type in ("TIMESTAMP", "DATE", "DATETIME"):
         max_partition = get_max_partition(bq_client, fq_table, partition_field)
-        logger.info(
-            f"Partición detectada: '{partition_field}' ({partition_bq_type}). "
-            f"Max partition: {max_partition}"
-        )
-    elif partition_field:
-        logger.info(
-            f"Partición no-fecha detectada: '{partition_field}' ({partition_bq_type}). "
-            "Solo se aplica TABLESAMPLE."
-        )
 
     query, job_config = _build_profile_query(
         fq_table=fq_table,
@@ -153,67 +127,73 @@ def build_profile(
         sample_percent=sample_percent,
     )
 
+    # OPTIMIZACIÓN: Añadimos un LIMIT para asegurar que quepa en 512MiB
+    query += " LIMIT 50000"
+
     logger.debug(f"Profiling query:\n{query}")
-    rows = list(bq_client.query(query, job_config=job_config).result())
 
-    if not rows:
-        logger.warning(
-            f"Sin filas para {fq_table}. El sample puede ser demasiado pequeño."
-        )
-        return {}
+    # OPTIMIZACIÓN: No convertir a list(). Usar el iterador directamente.
+    query_job = bq_client.query(query, job_config=job_config)
+    rows_iter = query_job.result()
 
-    total_rows = len(rows)
-
+    total_rows = 0
     col_original: Dict[str, List[Any]] = {c: [] for c in all_cols}
-    col_norm: Dict[str, List[Any]] = {c: [] for c in all_cols}
+    col_distinct_set: Dict[str, set] = {
+        c: set() for c in all_cols
+    }  # Usar sets directamente
     col_missing: Dict[str, int] = {c: 0 for c in all_cols}
+    col_non_null_count: Dict[str, int] = {c: 0 for c in all_cols}
 
-    for row in rows:
+    for row in rows_iter:
+        total_rows += 1
         for c in all_cols:
             value = row[c]
             if _is_missing(value):
                 col_missing[c] += 1
                 continue
+
+            col_non_null_count[c] += 1
+
+            # Solo guardamos ejemplos hasta el límite (ahorro de RAM)
             if len(col_original[c]) < max_examples:
                 col_original[c].append(value)
-            col_norm[c].append(_normalize_for_hash(value))
+
+            # Guardamos el hash para el cálculo de distintos (ahorro de RAM vs guardar objeto completo)
+            col_distinct_set[c].add(_normalize_for_hash(value))
+
+    if total_rows == 0:
+        logger.warning(f"Sin filas para {fq_table}.")
+        return {}
 
     profile: Dict[str, Dict] = {}
-
     for field in table.schema:
         name = field.name
         examples = col_original[name]
-        norm_values = col_norm[name]
+        distinct_count = len(col_distinct_set[name])
         missing_count = col_missing[name]
+        non_null_count = col_non_null_count[name]
 
-        seen: set = set()
-        dedup_display: List[str] = []
+        # Deduplicar ejemplos para mostrar
+        seen = set()
+        dedup_display = []
         for v in examples:
             key = _normalize_for_hash(v)
-            if key in seen:
-                continue
-            seen.add(key)
-            dedup_display.append(_to_display(v))
-            if len(dedup_display) >= max_examples:
-                break
-
-        null_ratio = round(missing_count / total_rows, 3)
-        non_null_count = len(norm_values)
-        distinct_ratio = round(
-            len(set(norm_values)) / non_null_count if non_null_count > 0 else 0.0,
-            3,
-        )
+            if key not in seen:
+                seen.add(key)
+                dedup_display.append(_to_display(v))
 
         profile[name] = {
             "type": field.field_type,
             "mode": field.mode,
             "bq_description": (field.description or "").strip(),
             "example_values": dedup_display,
-            "null_ratio": null_ratio,
-            "distinct_ratio": distinct_ratio,
+            "null_ratio": round(missing_count / total_rows, 3),
+            "distinct_ratio": round(
+                distinct_count / non_null_count if non_null_count > 0 else 0.0, 3
+            ),
         }
 
     logger.info(
-        f"Perfilado completado: {len(profile)} columnas | {total_rows} filas muestreadas"
+        f"Perfilado completado: {len(profile)} columnas | {total_rows} filas procesadas"
     )
     return profile
