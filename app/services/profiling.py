@@ -31,9 +31,9 @@ from google.api_core.exceptions import AlreadyExists
 
 logger = logging.getLogger(__name__)
 
-JOB_TIMEOUT_SECONDS       = 600
+JOB_TIMEOUT_SECONDS = 600
 JOB_POLL_INTERVAL_SECONDS = 15
-PROFILE_MAX_AGE_DAYS      = 7
+PROFILE_MAX_AGE_DAYS = 7
 
 
 def _bq_resource(project: str, dataset: str, table_id: str) -> str:
@@ -60,9 +60,9 @@ def _safe_float(value: Any) -> Optional[float]:
 # Busca un DataScan existente para la tabla BQ dada, sin depender de un ID fijo.
 def find_scan_for_table(
     client: dataplex_v1.DataScanServiceClient,
-    dataplex_project: str,   # proyecto transversal donde viven los DataScans
+    dataplex_project: str,  # proyecto transversal donde viven los DataScans
     location: str,
-    table_project: str,      # proyecto donde vive la tabla BQ
+    table_project: str,  # proyecto donde vive la tabla BQ
     dataset: str,
     table_id: str,
 ) -> Optional[DataScan]:
@@ -70,12 +70,10 @@ def find_scan_for_table(
     Lista los DataScans del proyecto transversal y devuelve el primero
     que apunte a la tabla BQ indicada y sea de tipo DATA_PROFILE.
     """
-    parent   = f"projects/{dataplex_project}/locations/{location}"
+    parent = f"projects/{dataplex_project}/locations/{location}"
     resource = _bq_resource(table_project, dataset, table_id)
 
-    logger.info(
-        f"Buscando DataScan en [{dataplex_project}] para recurso: {resource}"
-    )
+    logger.info(f"Buscando DataScan en [{dataplex_project}] para recurso: {resource}")
 
     for scan in client.list_data_scans(parent=parent):
         if (
@@ -92,22 +90,22 @@ def find_scan_for_table(
 # Crea un DataScan de perfilamiento para la tabla dada, con ID automático y export opcional a BQ.
 def create_profile_scan(
     client: dataplex_v1.DataScanServiceClient,
-    dataplex_project: str,   # proyecto transversal donde se crea el DataScan
+    dataplex_project: str,  # proyecto transversal donde se crea el DataScan
     location: str,
-    table_project: str,      # proyecto donde vive la tabla BQ
+    table_project: str,  # proyecto donde vive la tabla BQ
     dataset: str,
     table_id: str,
     sample_percent: float = 5.0,
     results_project: Optional[str] = None,
     results_dataset: Optional[str] = None,
-    results_table:   Optional[str] = None,
+    results_table: Optional[str] = None,
 ) -> DataScan:
     """
     Crea un DataScan de perfilamiento en el proyecto transversal,
     apuntando a la tabla BQ del proyecto origen.
     ID automático generado por Dataplex.
     """
-    parent   = f"projects/{dataplex_project}/locations/{location}"
+    parent = f"projects/{dataplex_project}/locations/{location}"
     resource = _bq_resource(table_project, dataset, table_id)
 
     # Export a BQ (opcional)
@@ -153,6 +151,7 @@ def create_profile_scan(
             "AlreadyExists pero no se encontró el scan en list_data_scans."
         )
 
+
 # Obtiene el último DataScanJob exitoso para el scan dado, o None si no hay ninguno.
 def get_latest_successful_job(
     client: dataplex_v1.DataScanServiceClient,
@@ -172,6 +171,7 @@ def get_latest_successful_job(
         logger.info("No hay jobs exitosos previos.")
 
     return latest
+
 
 # Lanza un job de perfilamiento y hace polling hasta que termine, devolviendo el resultado o lanzando error.
 def run_and_wait(
@@ -240,19 +240,19 @@ def parse_profile_to_dict(job: DataScanJob) -> Dict[str, Dict]:
     row_count = result.row_count or 1
 
     for field in result.fields:
-        name         = field.name
+        name = field.name
         profile_info = field.profile
 
-        null_count     = getattr(profile_info, "null_count", 0) or 0
+        null_count = getattr(profile_info, "null_count", 0) or 0
         distinct_count = getattr(profile_info, "distinct_count", 0) or 0
-        non_null       = max(row_count - null_count, 0)
-        null_ratio     = round(null_count / row_count, 3) if row_count else 0.0
+        non_null = max(row_count - null_count, 0)
+        null_ratio = round(null_count / row_count, 3) if row_count else 0.0
         distinct_ratio = round(distinct_count / non_null, 3) if non_null > 0 else 0.0
 
         numeric = getattr(profile_info, "numeric_statistics", None)
         min_val = _safe_float(getattr(numeric, "min_value", None))
         max_val = _safe_float(getattr(numeric, "max_value", None))
-        mean    = _safe_float(getattr(numeric, "average", None))
+        mean = _safe_float(getattr(numeric, "average", None))
         std_dev = _safe_float(getattr(numeric, "standard_deviation", None))
 
         quartiles: List[Optional[float]] = []
@@ -262,25 +262,27 @@ def parse_profile_to_dict(job: DataScanJob) -> Dict[str, Dict]:
         top_n_values: List[Dict] = []
         for item in getattr(profile_info, "top_n_values", []) or []:
             count = getattr(item, "count", 0) or 0
-            top_n_values.append({
-                "value": str(getattr(item, "value", "")),
-                "count": count,
-                "ratio": round(count / row_count, 4) if row_count else 0.0,
-            })
+            top_n_values.append(
+                {
+                    "value": str(getattr(item, "value", "")),
+                    "count": count,
+                    "ratio": round(count / row_count, 4) if row_count else 0.0,
+                }
+            )
 
         profile[name] = {
-            "type":           getattr(field, "type_", "UNKNOWN"),
-            "mode":           getattr(field, "mode", "NULLABLE"),
+            "type": getattr(field, "type_", "UNKNOWN"),
+            "mode": getattr(field, "mode", "NULLABLE"),
             "bq_description": "",
-            "null_ratio":     null_ratio,
+            "null_ratio": null_ratio,
             "distinct_ratio": distinct_ratio,
             "example_values": [t["value"] for t in top_n_values[:10]],
-            "min":            min_val,
-            "max":            max_val,
-            "mean":           mean,
-            "std_dev":        std_dev,
-            "quartiles":      quartiles,
-            "top_n_values":   top_n_values,
+            "min": min_val,
+            "max": max_val,
+            "mean": mean,
+            "std_dev": std_dev,
+            "quartiles": quartiles,
+            "top_n_values": top_n_values,
         }
 
     logger.info(f"Perfil parseado: {len(profile)} columnas | {row_count:,} filas")
@@ -289,17 +291,17 @@ def parse_profile_to_dict(job: DataScanJob) -> Dict[str, Dict]:
 
 # main
 def get_table_profile(
-    project: str,                          # proyecto de la tabla BQ
+    project: str,  # proyecto de la tabla BQ
     dataset: str,
     table_id: str,
-    dataplex_project: str,                 # proyecto transversal de Dataplex
+    dataplex_project: str,  # proyecto transversal de Dataplex
     location: str = "us-central1",
     sample_percent: float = 5.0,
     force_rerun: bool = False,
     max_age_days: int = PROFILE_MAX_AGE_DAYS,
     results_project: Optional[str] = None,
     results_dataset: Optional[str] = None,
-    results_table:   Optional[str] = None,
+    results_table: Optional[str] = None,
 ) -> Dict[str, Dict]:
     """
     Punto de entrada principal.
@@ -343,10 +345,14 @@ def get_table_profile(
     if not needs_rerun and latest_job is not None:
         age = datetime.datetime.now(datetime.timezone.utc) - latest_job.end_time
         if age.days > max_age_days:
-            logger.info(f"Perfil desactualizado ({age.days}d > {max_age_days}d). Relanzando.")
+            logger.info(
+                f"Perfil desactualizado ({age.days}d > {max_age_days}d). Relanzando."
+            )
             needs_rerun = True
         else:
-            logger.info(f"Perfil vigente (hace {age.days}d). Usando resultado existente.")
+            logger.info(
+                f"Perfil vigente (hace {age.days}d). Usando resultado existente."
+            )
 
     if needs_rerun:
         latest_job = run_and_wait(client, scan.name)

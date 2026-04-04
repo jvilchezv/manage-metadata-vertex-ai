@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from google.cloud import bigquery
 import logging
+import os
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -9,7 +10,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from app.adapters.bq_reader import get_table_metadata, get_table_status
-from app.adapters.dataplex_profiler import get_table_profile
+from app.services.profiling import get_table_profile
 from app.services.prompt_builder import build_prompt
 from app.adapters.vertex_llm import generate_metadata
 from app.validators.metadata_schema import validate_metadata
@@ -69,11 +70,11 @@ async def generate(project: str, dataset: str, table: str) -> TableMetadata:
         p, d, t = project.strip(), dataset.strip(), table.strip()
         # ── Paso 1: Perfilamiento vía Dataplex ───────────────────────────────
         profile = get_table_profile(
-            project=p,                        # proyecto de la tabla BQ
+            project=p,  # proyecto de la tabla BQ
             dataset=d,
             table_id=t,
-            dataplex_project=GOVERNANCE_PROJECT, # proyecto transversal
-            location="us-central1",            # ← ajusta a tu región
+            dataplex_project=GOVERNANCE_PROJECT,  # proyecto transversal
+            location="us-central1",  # ← ajusta a tu región
             sample_percent=1.0,
             max_age_days=7,
             # (opcional)
@@ -90,8 +91,8 @@ async def generate(project: str, dataset: str, table: str) -> TableMetadata:
 
         # ── Paso 2: Schema BQ + Prompt + LLM ─────────────────────────────────
         table_obj = get_table_metadata(p, d, t)
-        prompt    = build_prompt(table=table_obj, profile=profile)
-        payload   = generate_metadata(prompt)
+        prompt = build_prompt(table=table_obj, profile=profile)
+        payload = generate_metadata(prompt)
 
         # ── Paso 3: Validar ───────────────────────────────────────────────────
         errors = validate_metadata(payload)
