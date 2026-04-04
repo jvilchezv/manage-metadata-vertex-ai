@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from google.cloud import bigquery
 import logging
-import os
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -10,7 +9,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from app.adapters.bq_reader import get_table_metadata, get_table_status
-from app.services.profiling import get_table_profile
+from app.services.profiling import build_profile
 from app.services.prompt_builder import build_prompt
 from app.adapters.vertex_llm import generate_metadata
 from app.validators.metadata_schema import validate_metadata
@@ -22,9 +21,6 @@ from app.services.dataplex_writer import upsert_dataplex_aspects
 
 app = FastAPI(title="Metadata Generator API")
 
-# Proyecto transversal donde Dataplex gestiona los DataScans
-GOVERNANCE_PROJECT = os.getenv("GOVERNANCE_PROJECT", "rs-nprd-dlk-dd-trsv-ede4")
-
 
 @app.get("/")
 async def health():
@@ -32,8 +28,7 @@ async def health():
 
 
 @app.get(
-    "/projects/{project}/datasets/{dataset}/tables/{table}",
-    response_model=TableStatus,
+    "/projects/{project}/datasets/{dataset}/tables/{table}", response_model=TableStatus
 )
 async def get_table_info(project: str, dataset: str, table: str) -> TableStatus:
     client = bigquery.Client()
@@ -53,55 +48,20 @@ async def get_table_info(project: str, dataset: str, table: str) -> TableStatus:
     response_model=TableMetadata,
 )
 async def generate(project: str, dataset: str, table: str) -> TableMetadata:
-    """
-    Genera las descripciones para la tabla.
-
-    Flujo:
-        1. get_table_profile()  → busca o crea el DataScan en el proyecto
-                                   transversal de Dataplex. Reutiliza el perfil
-                                   si tiene < 7 días. Sin transferencia de datos
-                                   a Cloud Run.
-        2. get_table_metadata() → obtiene schema BQ (liviano).
-        3. build_prompt()       → construye el prompt con perfil + schema.
-        4. generate_metadata()  → llama al LLM.
-        5. validate_metadata()  → valida el schema del payload.
-    """
+    """Genera las descripciones para la tabla. Revisar el JSON antes de aprobar."""
     try:
-        p, d, t = project.strip(), dataset.strip(), table.strip()
-        # ── Paso 1: Perfilamiento vía Dataplex ───────────────────────────────
-        profile = get_table_profile(
-            project=p,  # proyecto de la tabla BQ
-            dataset=d,
-            table_id=t,
-            dataplex_project=GOVERNANCE_PROJECT,  # proyecto transversal
-            location="us-central1",  # ← ajusta a tu región
-            sample_percent=1.0,
-            max_age_days=7,
-            # (opcional)
-            # results_project=DATAPLEX_PROJECT,
-            # results_dataset="profiling_results",
-            # results_table="dataplex_profiles",
-        )
-
-        if not profile:
-            raise HTTPException(
-                status_code=422,
-                detail=f"No se pudo obtener el perfil de {p}.{d}.{t}",
-            )
-
-        # ── Paso 2: Schema BQ + Prompt + LLM ─────────────────────────────────
-        table_obj = get_table_metadata(p, d, t)
+        client = bigquery.Client()
+        table_obj = get_table_metadata(project.strip(), dataset.strip(), table.strip())
+        profile = build_profile(table=table_obj, bq_client=client)
         prompt = build_prompt(table=table_obj, profile=profile)
         payload = generate_metadata(prompt)
 
-        # ── Paso 3: Validar ───────────────────────────────────────────────────
         errors = validate_metadata(payload)
         if errors:
             raise HTTPException(
                 status_code=422,
                 detail={"error": "Invalid metadata schema", "details": errors},
             )
-
         return payload
 
     except HTTPException:
@@ -121,12 +81,12 @@ async def approve(
     """Recibe el JSON revisado por la persona y aplica las descripciones en BigQuery."""
     try:
         table_fqn = f"{project.strip()}.{dataset.strip()}.{table.strip()}"
-
-        # ── Paso 1: Actualizar BigQuery ───────────────────────────────────────
         update_table_metadata(table_fqn, payload.model_dump())
         logger.info(f"[Approve] BigQuery actualizado para: {table_fqn}")
 
         # ── Paso 2: Publicar en Dataplex ──────────────────────────────────────
+        # Construye y publica los 3 Aspect Types en Dataplex Catalog.
+        # Usa el mismo payload aprobado, no hace ninguna transformación previa.
         dataplex_result = upsert_dataplex_aspects(payload.model_dump())
 
         if dataplex_result.success:
@@ -135,7 +95,9 @@ async def approve(
                 f"Aspects: {dataplex_result.aspects_updated}"
             )
         else:
-            # BigQuery ya se escribió — no forzamos re-aprobación por fallo de Dataplex
+            # Loguear el error pero retornar 200 igual — BigQuery ya se escribió
+            # y no queremos que el usuario tenga que re-aprobar por un fallo de Dataplex.
+            # El equipo de datos puede re-publicar en Dataplex manualmente si es necesario.
             logger.error(
                 f"[Approve] Dataplex falló para {table_fqn}: {dataplex_result.errors}"
             )

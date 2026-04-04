@@ -1,361 +1,219 @@
-"""
-Adapter para perfilamiento de tablas BigQuery usando Dataplex Data Profile Scans.
-
-Parámetros clave:
-  - dataplex_project : proyecto transversal donde viven los DataScans
-  - project          : proyecto donde vive la tabla BQ (puede ser diferente)
-
-Flujo:
-    1. find_scan_for_table()         → busca DataScan en proyecto transversal
-    2. create_profile_scan()         → crea si no existe (ID automático)
-    3. get_latest_successful_job()   → obtiene último job exitoso
-    4. run_and_wait()                → lanza nuevo job si es necesario
-    5. parse_profile_to_dict()       → convierte resultado al formato del prompt
-"""
-
-from __future__ import annotations
-
-import datetime
+from typing import Any, Dict, List
+from google.cloud import bigquery
 import logging
-import time
-from typing import Any, Dict, List, Optional
+import base64
+import datetime
+import json
+from decimal import Decimal
 
-from google.cloud import dataplex_v1
-from google.cloud.dataplex_v1.types import (
-    DataScan,
-    DataScanJob,
-    DataProfileResult,
-    DataProfileSpec,
-)
-from google.api_core.exceptions import AlreadyExists
+from app.adapters.bq_reader import get_partition_field, get_max_partition
 
 logger = logging.getLogger(__name__)
 
-JOB_TIMEOUT_SECONDS = 600
-JOB_POLL_INTERVAL_SECONDS = 15
-PROFILE_MAX_AGE_DAYS = 7
+
+def _is_missing(value: Any) -> bool:
+    """Considera ausente None o lista vacía (REPEATED sin elementos)."""
+    if value is None:
+        return True
+    if isinstance(value, list) and len(value) == 0:
+        return True
+    return False
 
 
-def _bq_resource(project: str, dataset: str, table_id: str) -> str:
-    return (
-        f"//bigquery.googleapis.com/projects/{project}"
-        f"/datasets/{dataset}/tables/{table_id}"
-    )
+def _normalize_for_hash(value: Any) -> Any:
+    """
+    Convierte cualquier valor a algo hasheable para comparación/deduplicación.
+    """
+    if isinstance(value, dict):
+        return tuple(sorted((k, _normalize_for_hash(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_normalize_for_hash(v) for v in value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return base64.b64encode(bytes(value)).decode("ascii")
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        if isinstance(value, datetime.datetime) and value.tzinfo:
+            return value.astimezone(datetime.timezone.utc).isoformat()
+        return value.isoformat()
+    return value
 
 
-def _bq_export_uri(project: str, dataset: str, table_id: str) -> str:
-    return (
-        f"//bigquery.googleapis.com/projects/{project}"
-        f"/datasets/{dataset}/tables/{table_id}"
-    )
-
-
-def _safe_float(value: Any) -> Optional[float]:
+def _to_display(value: Any) -> str:
     try:
-        return float(value) if value is not None else None
-    except (TypeError, ValueError):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    except TypeError:
+        norm = _normalize_for_hash(value)
+        return json.dumps(norm, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _get_partition_bq_type(
+    table: bigquery.Table, partition_field_name: str | None
+) -> str | None:
+    """Obtiene el tipo BigQuery del campo de partición directamente desde el schema."""
+    if not partition_field_name:
         return None
-
-
-# Busca un DataScan existente para la tabla BQ dada, sin depender de un ID fijo.
-def find_scan_for_table(
-    client: dataplex_v1.DataScanServiceClient,
-    dataplex_project: str,  # proyecto transversal donde viven los DataScans
-    location: str,
-    table_project: str,  # proyecto donde vive la tabla BQ
-    dataset: str,
-    table_id: str,
-) -> Optional[DataScan]:
-    """
-    Lista los DataScans del proyecto transversal y devuelve el primero
-    que apunte a la tabla BQ indicada y sea de tipo DATA_PROFILE.
-    """
-    parent = f"projects/{dataplex_project}/locations/{location}"
-    resource = _bq_resource(table_project, dataset, table_id)
-
-    logger.info(f"Buscando DataScan en [{dataplex_project}] para recurso: {resource}")
-
-    for scan in client.list_data_scans(parent=parent):
-        if (
-            scan.data.resource == resource
-            and scan.type_ == DataScan.DataScanType.DATA_PROFILE
-        ):
-            logger.info(f"DataScan encontrado: {scan.name}")
-            return scan
-
-    logger.info("No se encontró DataScan existente.")
+    for f in table.schema:
+        if f.name == partition_field_name:
+            return f.field_type.upper()
     return None
 
 
-# Crea un DataScan de perfilamiento para la tabla dada, con ID automático y export opcional a BQ.
-def create_profile_scan(
-    client: dataplex_v1.DataScanServiceClient,
-    dataplex_project: str,  # proyecto transversal donde se crea el DataScan
-    location: str,
-    table_project: str,  # proyecto donde vive la tabla BQ
-    dataset: str,
-    table_id: str,
-    sample_percent: float = 5.0,
-    results_project: Optional[str] = None,
-    results_dataset: Optional[str] = None,
-    results_table: Optional[str] = None,
-) -> DataScan:
+def _build_profile_query(
+    fq_table: str,
+    cols_select_str: str,
+    partition_field: str | None,
+    partition_bq_type: str | None,
+    max_partition: Any,
+    sample_percent: int,
+) -> tuple[str, bigquery.QueryJobConfig | None]:
     """
-    Crea un DataScan de perfilamiento en el proyecto transversal,
-    apuntando a la tabla BQ del proyecto origen.
-    ID automático generado por Dataplex.
+    Construye la query de perfilado con:
+    - TABLESAMPLE SYSTEM para muestrear ~sample_percent% de la tabla.
+    - Filtro DATE_TRUNC al mes más reciente si la tabla tiene partición por fecha.
+
+    Retorna (query_str, job_config_o_None).
     """
-    parent = f"projects/{dataplex_project}/locations/{location}"
-    resource = _bq_resource(table_project, dataset, table_id)
+    sample_clause = f"TABLESAMPLE SYSTEM ({sample_percent} PERCENT)"
 
-    # Export a BQ (opcional)
-    post_scan_actions = None
-    if results_project and results_dataset and results_table:
-        export_uri = _bq_export_uri(results_project, results_dataset, results_table)
-        logger.info(f"Resultados se exportarán a: {export_uri}")
-        post_scan_actions = DataProfileSpec.PostScanActions(
-            bigquery_export=DataProfileSpec.PostScanActions.BigQueryExport(
-                results_table=export_uri
-            )
+    if partition_field and partition_bq_type in ("TIMESTAMP", "DATE", "DATETIME"):
+        cast_type = partition_bq_type
+
+        query = f"""
+        SELECT {cols_select_str}
+        FROM `{fq_table}` {sample_clause}
+        WHERE DATE_TRUNC(CAST(`{partition_field}` AS {cast_type}), MONTH)
+            = DATE_TRUNC(CAST(@max_partition AS {cast_type}), MONTH)
+        """
+
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("max_partition", cast_type, max_partition)
+            ]
         )
+        return query, job_config
 
-    new_scan = DataScan(
-        data=dataplex_v1.DataSource(resource=resource),
-        data_profile_spec=DataProfileSpec(
-            sampling_percent=sample_percent,
-            **({"post_scan_actions": post_scan_actions} if post_scan_actions else {}),
-        ),
-        description=f"Auto profile scan for {dataset}.{table_id}",
-    )
-
-    try:
-        # Sin data_scan_id → Dataplex genera el ID automáticamente
-        operation = client.create_data_scan(
-            parent=parent,
-            data_scan=new_scan,
-        )
-        scan = operation.result()
-        logger.info(
-            f"DataScan creado en [{dataplex_project}] con ID automático: {scan.name}"
-        )
-        return scan
-
-    except AlreadyExists:
-        logger.warning("AlreadyExists en create — reintentando búsqueda.")
-        scan = find_scan_for_table(
-            client, dataplex_project, location, table_project, dataset, table_id
-        )
-        if scan:
-            return scan
-        raise RuntimeError(
-            "AlreadyExists pero no se encontró el scan en list_data_scans."
-        )
+    query = f"SELECT {cols_select_str} FROM `{fq_table}` {sample_clause}"
+    return query, None
 
 
-# Obtiene el último DataScanJob exitoso para el scan dado, o None si no hay ninguno.
-def get_latest_successful_job(
-    client: dataplex_v1.DataScanServiceClient,
-    scan_name: str,
-) -> Optional[DataScanJob]:
-    latest: Optional[DataScanJob] = None
-
-    for job in client.list_data_scan_jobs(parent=scan_name):
-        if job.state != DataScanJob.State.SUCCEEDED:
-            continue
-        if latest is None or job.end_time > latest.end_time:
-            latest = job
-
-    if latest:
-        logger.info(f"Último job exitoso: {latest.name} | fin: {latest.end_time}")
-    else:
-        logger.info("No hay jobs exitosos previos.")
-
-    return latest
-
-
-# Lanza un job de perfilamiento y hace polling hasta que termine, devolviendo el resultado o lanzando error.
-def run_and_wait(
-    client: dataplex_v1.DataScanServiceClient,
-    scan_name: str,
-    timeout: int = JOB_TIMEOUT_SECONDS,
-    poll_interval: int = JOB_POLL_INTERVAL_SECONDS,
-) -> DataScanJob:
-    logger.info(f"Lanzando job para: {scan_name}")
-    response = client.run_data_scan(name=scan_name)
-    job_name = response.job.name
-    logger.info(f"Job lanzado: {job_name}")
-
-    elapsed = 0
-    while elapsed < timeout:
-        time.sleep(poll_interval)
-        elapsed += poll_interval
-
-        job = client.get_data_scan_job(
-            name=job_name,
-            view=dataplex_v1.GetDataScanJobRequest.DataScanJobView.FULL,
-        )
-        logger.info(f"  Estado: {job.state.name} | {elapsed}s elapsed")
-
-        if job.state == DataScanJob.State.SUCCEEDED:
-            logger.info(f"Job completado: {job_name}")
-            return job
-
-        if job.state in (DataScanJob.State.FAILED, DataScanJob.State.CANCELLED):
-            raise RuntimeError(
-                f"Job Dataplex terminó con estado {job.state.name}: {job_name}"
-            )
-
-    raise TimeoutError(f"Job no terminó en {timeout}s: {job_name}")
-
-
-# Convierte el DataProfileResult al formato estándar del prompt.
-def parse_profile_to_dict(job: DataScanJob) -> Dict[str, Dict]:
-    """
-    Convierte el DataProfileResult al formato estándar del prompt:
-
-        {
-            "col": {
-                "type":           "STRING",
-                "mode":           "NULLABLE",
-                "bq_description": "",
-                "null_ratio":     0.02,
-                "distinct_ratio": 0.98,
-                "example_values": ["val1", "val2"],
-                "min":            None,
-                "max":            None,
-                "mean":           None,
-                "std_dev":        None,
-                "quartiles":      [],
-                "top_n_values":   [{"value": "X", "count": 10, "ratio": 0.05}],
-            }
-        }
-    """
-    result: DataProfileResult = job.data_profile_result
-    profile: Dict[str, Dict] = {}
-
-    if not result or not result.fields:
-        logger.warning("DataProfileResult vacío o sin campos.")
-        return profile
-
-    row_count = result.row_count or 1
-
-    for field in result.fields:
-        name = field.name
-        profile_info = field.profile
-
-        null_count = getattr(profile_info, "null_count", 0) or 0
-        distinct_count = getattr(profile_info, "distinct_count", 0) or 0
-        non_null = max(row_count - null_count, 0)
-        null_ratio = round(null_count / row_count, 3) if row_count else 0.0
-        distinct_ratio = round(distinct_count / non_null, 3) if non_null > 0 else 0.0
-
-        numeric = getattr(profile_info, "numeric_statistics", None)
-        min_val = _safe_float(getattr(numeric, "min_value", None))
-        max_val = _safe_float(getattr(numeric, "max_value", None))
-        mean = _safe_float(getattr(numeric, "average", None))
-        std_dev = _safe_float(getattr(numeric, "standard_deviation", None))
-
-        quartiles: List[Optional[float]] = []
-        if numeric and getattr(numeric, "quartiles", None):
-            quartiles = [_safe_float(q) for q in numeric.quartiles]
-
-        top_n_values: List[Dict] = []
-        for item in getattr(profile_info, "top_n_values", []) or []:
-            count = getattr(item, "count", 0) or 0
-            top_n_values.append(
-                {
-                    "value": str(getattr(item, "value", "")),
-                    "count": count,
-                    "ratio": round(count / row_count, 4) if row_count else 0.0,
-                }
-            )
-
-        profile[name] = {
-            "type": getattr(field, "type_", "UNKNOWN"),
-            "mode": getattr(field, "mode", "NULLABLE"),
-            "bq_description": "",
-            "null_ratio": null_ratio,
-            "distinct_ratio": distinct_ratio,
-            "example_values": [t["value"] for t in top_n_values[:10]],
-            "min": min_val,
-            "max": max_val,
-            "mean": mean,
-            "std_dev": std_dev,
-            "quartiles": quartiles,
-            "top_n_values": top_n_values,
-        }
-
-    logger.info(f"Perfil parseado: {len(profile)} columnas | {row_count:,} filas")
-    return profile
-
-
-# main
-def get_table_profile(
-    project: str,  # proyecto de la tabla BQ
-    dataset: str,
-    table_id: str,
-    dataplex_project: str,  # proyecto transversal de Dataplex
-    location: str = "us-central1",
-    sample_percent: float = 5.0,
-    force_rerun: bool = False,
-    max_age_days: int = PROFILE_MAX_AGE_DAYS,
-    results_project: Optional[str] = None,
-    results_dataset: Optional[str] = None,
-    results_table: Optional[str] = None,
+def build_profile(
+    table: bigquery.Table,
+    bq_client: bigquery.Client,
+    max_examples: int = 10,
+    sample_percent: int = 10,
 ) -> Dict[str, Dict]:
     """
-    Punto de entrada principal.
+    Perfila una tabla BigQuery usando todos sus campos (incluye bq_description
+    de cada SchemaField) y un muestreo aproximado del sample_percent% de los
+    datos del mes más reciente (si la tabla tiene partición por fecha) o de
+    toda la tabla.
 
-    dataplex_project : proyecto transversal donde se crean/leen los DataScans
-    project          : proyecto donde vive la tabla BQ a perfilar
+    Retorna un dict keyed por nombre de columna con:
+        - type            : tipo BQ del campo
+        - mode            : NULLABLE / REQUIRED / REPEATED
+        - bq_description  : descripción registrada en BQ (puede ser "")
+        - example_values  : lista de strings JSON deduplicados
+        - null_ratio      : proporción de nulos/vacíos sobre total de filas
+        - distinct_ratio  : proporción de valores únicos sobre no-nulos
     """
-    client = dataplex_v1.DataScanServiceClient()
+    fq_table = f"{table.project}.{table.dataset_id}.{table.table_id}"
+    logger.info(f"Profiling table: {fq_table} | sample={sample_percent}%")
 
-    # 1. Buscar scan en el proyecto transversal
-    scan = find_scan_for_table(
-        client=client,
-        dataplex_project=dataplex_project,
-        location=location,
-        table_project=project,
-        dataset=dataset,
-        table_id=table_id,
-    )
+    all_cols = [f.name for f in table.schema]
 
-    # 2. Crear si no existe — en el proyecto transversal
-    if scan is None:
-        scan = create_profile_scan(
-            client=client,
-            dataplex_project=dataplex_project,
-            location=location,
-            table_project=project,
-            dataset=dataset,
-            table_id=table_id,
-            sample_percent=sample_percent,
-            results_project=results_project,
-            results_dataset=results_dataset,
-            results_table=results_table,
+    if not all_cols:
+        logger.error(f"El schema de {fq_table} está vacío.")
+        return {}
+
+    cols_select_str = ", ".join([f"`{c}`" for c in all_cols])
+
+    partition_field = get_partition_field(table)
+    partition_bq_type = _get_partition_bq_type(table, partition_field)
+    max_partition = None
+
+    if partition_field and partition_bq_type in ("TIMESTAMP", "DATE", "DATETIME"):
+        max_partition = get_max_partition(bq_client, fq_table, partition_field)
+        logger.info(
+            f"Partición detectada: '{partition_field}' ({partition_bq_type}). "
+            f"Max partition: {max_partition}"
+        )
+    elif partition_field:
+        logger.info(
+            f"Partición no-fecha detectada: '{partition_field}' ({partition_bq_type}). "
+            "Solo se aplica TABLESAMPLE."
         )
 
-    # 3. Último job exitoso
-    latest_job = get_latest_successful_job(client, scan.name)
+    query, job_config = _build_profile_query(
+        fq_table=fq_table,
+        cols_select_str=cols_select_str,
+        partition_field=partition_field,
+        partition_bq_type=partition_bq_type,
+        max_partition=max_partition,
+        sample_percent=sample_percent,
+    )
 
-    # 4. Decidir si relanzar
-    needs_rerun = force_rerun or latest_job is None
+    logger.debug(f"Profiling query:\n{query}")
+    rows = list(bq_client.query(query, job_config=job_config).result())
 
-    if not needs_rerun and latest_job is not None:
-        age = datetime.datetime.now(datetime.timezone.utc) - latest_job.end_time
-        if age.days > max_age_days:
-            logger.info(
-                f"Perfil desactualizado ({age.days}d > {max_age_days}d). Relanzando."
-            )
-            needs_rerun = True
-        else:
-            logger.info(
-                f"Perfil vigente (hace {age.days}d). Usando resultado existente."
-            )
+    if not rows:
+        logger.warning(
+            f"Sin filas para {fq_table}. El sample puede ser demasiado pequeño."
+        )
+        return {}
 
-    if needs_rerun:
-        latest_job = run_and_wait(client, scan.name)
+    total_rows = len(rows)
 
-    # 5. Parsear y devolver
-    return parse_profile_to_dict(latest_job)
+    col_original: Dict[str, List[Any]] = {c: [] for c in all_cols}
+    col_norm: Dict[str, List[Any]] = {c: [] for c in all_cols}
+    col_missing: Dict[str, int] = {c: 0 for c in all_cols}
+
+    for row in rows:
+        for c in all_cols:
+            value = row[c]
+            if _is_missing(value):
+                col_missing[c] += 1
+                continue
+            if len(col_original[c]) < max_examples:
+                col_original[c].append(value)
+            col_norm[c].append(_normalize_for_hash(value))
+
+    profile: Dict[str, Dict] = {}
+
+    for field in table.schema:
+        name = field.name
+        examples = col_original[name]
+        norm_values = col_norm[name]
+        missing_count = col_missing[name]
+
+        seen: set = set()
+        dedup_display: List[str] = []
+        for v in examples:
+            key = _normalize_for_hash(v)
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup_display.append(_to_display(v))
+            if len(dedup_display) >= max_examples:
+                break
+
+        null_ratio = round(missing_count / total_rows, 3)
+        non_null_count = len(norm_values)
+        distinct_ratio = round(
+            len(set(norm_values)) / non_null_count if non_null_count > 0 else 0.0,
+            3,
+        )
+
+        profile[name] = {
+            "type": field.field_type,
+            "mode": field.mode,
+            "bq_description": (field.description or "").strip(),
+            "example_values": dedup_display,
+            "null_ratio": null_ratio,
+            "distinct_ratio": distinct_ratio,
+        }
+
+    logger.info(
+        f"Perfilado completado: {len(profile)} columnas | {total_rows} filas muestreadas"
+    )
+    return profile
