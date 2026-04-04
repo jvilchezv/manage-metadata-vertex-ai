@@ -9,7 +9,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from app.adapters.bq_reader import get_table_metadata, get_table_status
-from app.services.profiling import build_profile
+from app.services.profiling import get_table_profile
 from app.services.prompt_builder import build_prompt
 from app.adapters.vertex_llm import generate_metadata
 from app.validators.metadata_schema import validate_metadata
@@ -50,9 +50,16 @@ async def get_table_info(project: str, dataset: str, table: str) -> TableStatus:
 async def generate(project: str, dataset: str, table: str) -> TableMetadata:
     """Genera las descripciones para la tabla. Revisar el JSON antes de aprobar."""
     try:
-        client = bigquery.Client()
+        profile = get_table_profile(
+            project=project.strip(),
+            dataset=dataset.strip(),
+            table_id=table.strip(),
+            location="us-central1",
+            # results_project=project.strip(), # opcional: exportar a BQ
+            # results_dataset="profiling_results",
+            # results_table="dataplex_profiles",
+        )
         table_obj = get_table_metadata(project.strip(), dataset.strip(), table.strip())
-        profile = build_profile(table=table_obj, bq_client=client)
         prompt = build_prompt(table=table_obj, profile=profile)
         payload = generate_metadata(prompt)
 
