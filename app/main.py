@@ -22,7 +22,7 @@ from app.services.dataplex_writer import upsert_dataplex_aspects
 app = FastAPI(title="Metadata Generator API")
 
 # Proyecto transversal donde Dataplex gestiona los DataScans
-DATAPLEX_PROJECT = "rs-nprd-dlk-transversal"   # ← ajusta si es diferente
+GOVERNANCE_PROJECT = os.getenv("GOVERNANCE_PROJECT", "rs-nprd-dlk-dd-trsv-ede4")
 
 
 @app.get("/")
@@ -72,7 +72,7 @@ async def generate(project: str, dataset: str, table: str) -> TableMetadata:
             project=p,                        # proyecto de la tabla BQ
             dataset=d,
             table_id=t,
-            dataplex_project=DATAPLEX_PROJECT, # proyecto transversal
+            dataplex_project=GOVERNANCE_PROJECT, # proyecto transversal
             location="us-central1",            # ← ajusta a tu región
             sample_percent=1.0,
             max_age_days=7,
