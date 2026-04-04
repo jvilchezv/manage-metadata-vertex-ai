@@ -1,31 +1,16 @@
 """
-====================
 Adapter para perfilamiento de tablas BigQuery usando Dataplex Data Profile Scans.
 
-Características:
-  - Sin scan_id manual: Dataplex lo genera automáticamente.
-  - Búsqueda de scan por recurso BQ (list_data_scans + filtro).
-  - Export automático de resultados a tabla BQ via post_scan_actions.
+Parámetros clave:
+  - dataplex_project : proyecto transversal donde viven los DataScans
+  - project          : proyecto donde vive la tabla BQ (puede ser diferente)
 
 Flujo:
-    1. find_scan_for_table()         → busca DataScan existente para la tabla
+    1. find_scan_for_table()         → busca DataScan en proyecto transversal
     2. create_profile_scan()         → crea si no existe (ID automático)
     3. get_latest_successful_job()   → obtiene último job exitoso
     4. run_and_wait()                → lanza nuevo job si es necesario
     5. parse_profile_to_dict()       → convierte resultado al formato del prompt
-
-Uso típico:
-    from app.adapters.dataplex_profiler import get_table_profile
-
-    profile = get_table_profile(
-        project="mi-proyecto",
-        dataset="mi_dataset",
-        table_id="mi_tabla",
-        location="us-central1",
-        results_project="mi-proyecto",
-        results_dataset="profiling_results",
-        results_table="dataplex_profiles",
-    )
 """
 
 from __future__ import annotations
@@ -46,12 +31,12 @@ from google.api_core.exceptions import AlreadyExists
 
 logger = logging.getLogger(__name__)
 
-JOB_TIMEOUT_SECONDS   = 600   # 10 minutos
+JOB_TIMEOUT_SECONDS       = 600
 JOB_POLL_INTERVAL_SECONDS = 15
-PROFILE_MAX_AGE_DAYS  = 7
+PROFILE_MAX_AGE_DAYS      = 7
+
 
 def _bq_resource(project: str, dataset: str, table_id: str) -> str:
-    """URI canónico del recurso BQ que usa Dataplex."""
     return (
         f"//bigquery.googleapis.com/projects/{project}"
         f"/datasets/{dataset}/tables/{table_id}"
@@ -59,7 +44,6 @@ def _bq_resource(project: str, dataset: str, table_id: str) -> str:
 
 
 def _bq_export_uri(project: str, dataset: str, table_id: str) -> str:
-    """URI canónico de la tabla de resultados para post_scan_actions."""
     return (
         f"//bigquery.googleapis.com/projects/{project}"
         f"/datasets/{dataset}/tables/{table_id}"
@@ -76,22 +60,22 @@ def _safe_float(value: Any) -> Optional[float]:
 # Busca un DataScan existente para la tabla BQ dada, sin depender de un ID fijo.
 def find_scan_for_table(
     client: dataplex_v1.DataScanServiceClient,
-    project: str,
+    dataplex_project: str,   # proyecto transversal donde viven los DataScans
     location: str,
+    table_project: str,      # proyecto donde vive la tabla BQ
     dataset: str,
     table_id: str,
 ) -> Optional[DataScan]:
     """
-    Lista todos los DataScans del proyecto/location y devuelve el primero
+    Lista los DataScans del proyecto transversal y devuelve el primero
     que apunte a la tabla BQ indicada y sea de tipo DATA_PROFILE.
-
-    Al no depender de un ID fijo, funciona aunque el scan haya sido creado
-    manualmente o por otro proceso.
     """
-    parent     = f"projects/{project}/locations/{location}"
-    resource   = _bq_resource(project, dataset, table_id)
+    parent   = f"projects/{dataplex_project}/locations/{location}"
+    resource = _bq_resource(table_project, dataset, table_id)
 
-    logger.info(f"Buscando DataScan para: {resource}")
+    logger.info(
+        f"Buscando DataScan en [{dataplex_project}] para recurso: {resource}"
+    )
 
     for scan in client.list_data_scans(parent=parent):
         if (
@@ -104,11 +88,13 @@ def find_scan_for_table(
     logger.info("No se encontró DataScan existente.")
     return None
 
+
 # Crea un DataScan de perfilamiento para la tabla dada, con ID automático y export opcional a BQ.
 def create_profile_scan(
     client: dataplex_v1.DataScanServiceClient,
-    project: str,
+    dataplex_project: str,   # proyecto transversal donde se crea el DataScan
     location: str,
+    table_project: str,      # proyecto donde vive la tabla BQ
     dataset: str,
     table_id: str,
     sample_percent: float = 5.0,
@@ -117,16 +103,14 @@ def create_profile_scan(
     results_table:   Optional[str] = None,
 ) -> DataScan:
     """
-    Crea un DataScan de perfilamiento con:
-      - ID automático generado por Dataplex (no lo seteamos).
-      - Export de resultados a tabla BQ si se pasan results_*.
-
-    Si hay AlreadyExists (race condition), reintenta la búsqueda.
+    Crea un DataScan de perfilamiento en el proyecto transversal,
+    apuntando a la tabla BQ del proyecto origen.
+    ID automático generado por Dataplex.
     """
-    parent   = f"projects/{project}/locations/{location}"
-    resource = _bq_resource(project, dataset, table_id)
+    parent   = f"projects/{dataplex_project}/locations/{location}"
+    resource = _bq_resource(table_project, dataset, table_id)
 
-    # --- post_scan_actions: export a BQ (opcional) ---
+    # Export a BQ (opcional)
     post_scan_actions = None
     if results_project and results_dataset and results_table:
         export_uri = _bq_export_uri(results_project, results_dataset, results_table)
@@ -147,20 +131,22 @@ def create_profile_scan(
     )
 
     try:
-        # SIN data_scan_id → Dataplex genera el ID automáticamente
+        # Sin data_scan_id → Dataplex genera el ID automáticamente
         operation = client.create_data_scan(
             parent=parent,
             data_scan=new_scan,
-            # data_scan_id no se pasa → ID automático
         )
         scan = operation.result()
-        logger.info(f"DataScan creado con ID automático: {scan.name}")
+        logger.info(
+            f"DataScan creado en [{dataplex_project}] con ID automático: {scan.name}"
+        )
         return scan
 
     except AlreadyExists:
-        # Race condition: otro proceso lo creó justo antes
         logger.warning("AlreadyExists en create — reintentando búsqueda.")
-        scan = find_scan_for_table(client, project, location, dataset, table_id)
+        scan = find_scan_for_table(
+            client, dataplex_project, location, table_project, dataset, table_id
+        )
         if scan:
             return scan
         raise RuntimeError(
@@ -172,9 +158,6 @@ def get_latest_successful_job(
     client: dataplex_v1.DataScanServiceClient,
     scan_name: str,
 ) -> Optional[DataScanJob]:
-    """
-    Devuelve el último DataScanJob con estado SUCCEEDED, o None.
-    """
     latest: Optional[DataScanJob] = None
 
     for job in client.list_data_scan_jobs(parent=scan_name):
@@ -197,11 +180,6 @@ def run_and_wait(
     timeout: int = JOB_TIMEOUT_SECONDS,
     poll_interval: int = JOB_POLL_INTERVAL_SECONDS,
 ) -> DataScanJob:
-    """
-    Lanza un job de perfilamiento y hace polling hasta que termine.
-    Devuelve el DataScanJob con estado SUCCEEDED.
-    Lanza TimeoutError o RuntimeError según el caso.
-    """
     logger.info(f"Lanzando job para: {scan_name}")
     response = client.run_data_scan(name=scan_name)
     job_name = response.job.name
@@ -265,14 +243,12 @@ def parse_profile_to_dict(job: DataScanJob) -> Dict[str, Dict]:
         name         = field.name
         profile_info = field.profile
 
-        # --- Métricas básicas ---
         null_count     = getattr(profile_info, "null_count", 0) or 0
         distinct_count = getattr(profile_info, "distinct_count", 0) or 0
         non_null       = max(row_count - null_count, 0)
         null_ratio     = round(null_count / row_count, 3) if row_count else 0.0
         distinct_ratio = round(distinct_count / non_null, 3) if non_null > 0 else 0.0
 
-        # --- Estadísticas numéricas ---
         numeric = getattr(profile_info, "numeric_statistics", None)
         min_val = _safe_float(getattr(numeric, "min_value", None))
         max_val = _safe_float(getattr(numeric, "max_value", None))
@@ -283,7 +259,6 @@ def parse_profile_to_dict(job: DataScanJob) -> Dict[str, Dict]:
         if numeric and getattr(numeric, "quartiles", None):
             quartiles = [_safe_float(q) for q in numeric.quartiles]
 
-        # --- Top N valores frecuentes → example_values ---
         top_n_values: List[Dict] = []
         for item in getattr(profile_info, "top_n_values", []) or []:
             count = getattr(item, "count", 0) or 0
@@ -311,13 +286,15 @@ def parse_profile_to_dict(job: DataScanJob) -> Dict[str, Dict]:
     logger.info(f"Perfil parseado: {len(profile)} columnas | {row_count:,} filas")
     return profile
 
+
 # main
 def get_table_profile(
-    project: str,
+    project: str,                          # proyecto de la tabla BQ
     dataset: str,
     table_id: str,
+    dataplex_project: str,                 # proyecto transversal de Dataplex
     location: str = "us-central1",
-    sample_percent: float = 1.0,
+    sample_percent: float = 5.0,
     force_rerun: bool = False,
     max_age_days: int = PROFILE_MAX_AGE_DAYS,
     results_project: Optional[str] = None,
@@ -327,37 +304,28 @@ def get_table_profile(
     """
     Punto de entrada principal.
 
-    Flujo:
-        1. Busca DataScan por recurso BQ (sin depender de ID fijo).
-        2. Si no existe → crea con ID automático + export BQ opcional.
-        3. Verifica si el último job es reciente (< max_age_days).
-        4. Si es viejo, no existe, o force_rerun=True → lanza nuevo job.
-        5. Parsea y devuelve el perfil.
-
-    Parámetros
-    ----------
-    project          : proyecto GCP de la tabla a perfilar
-    dataset          : dataset BigQuery de la tabla
-    table_id         : nombre de la tabla
-    location         : región Dataplex (debe coincidir con la del dataset BQ)
-    sample_percent   : % de muestra (default 5%)
-    force_rerun      : forzar nuevo scan aunque haya uno reciente
-    max_age_days     : días antes de considerar el perfil desactualizado
-    results_project  : proyecto donde exportar resultados (opcional)
-    results_dataset  : dataset donde exportar resultados (opcional)
-    results_table    : tabla donde exportar resultados (opcional)
+    dataplex_project : proyecto transversal donde se crean/leen los DataScans
+    project          : proyecto donde vive la tabla BQ a perfilar
     """
     client = dataplex_v1.DataScanServiceClient()
 
-    # 1. Buscar scan existente
-    scan = find_scan_for_table(client, project, location, dataset, table_id)
+    # 1. Buscar scan en el proyecto transversal
+    scan = find_scan_for_table(
+        client=client,
+        dataplex_project=dataplex_project,
+        location=location,
+        table_project=project,
+        dataset=dataset,
+        table_id=table_id,
+    )
 
-    # 2. Crear si no existe
+    # 2. Crear si no existe — en el proyecto transversal
     if scan is None:
         scan = create_profile_scan(
             client=client,
-            project=project,
+            dataplex_project=dataplex_project,
             location=location,
+            table_project=project,
             dataset=dataset,
             table_id=table_id,
             sample_percent=sample_percent,
