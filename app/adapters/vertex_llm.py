@@ -30,11 +30,10 @@ def generate_metadata(prompt: str, retries: int = 2) -> dict:
 
             data = json.loads(raw_text)
 
-            data["model"] = {
-                "name": "manage-metadata-gemini",
-                "version": MODEL_NAME
-            }
-            data["generated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            data["model"] = {"name": "manage-metadata-gemini", "version": MODEL_NAME}
+            data["generated_at"] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
             print(data["generated_at"])
             logger.debug(f"LLM raw response: {data}")
 
@@ -42,7 +41,9 @@ def generate_metadata(prompt: str, retries: int = 2) -> dict:
 
         except Exception as e:
             last_error = str(e)
-            logger.warning(f"LLM attempt {attempt + 1}/{retries + 1} failed: {last_error}")
+            logger.warning(
+                f"LLM attempt {attempt + 1}/{retries + 1} failed: {last_error}"
+            )
             time.sleep(1)
 
     raise RuntimeError(f"LLM failed after {retries + 1} attempts: {last_error}")

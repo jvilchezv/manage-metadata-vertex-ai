@@ -22,8 +22,7 @@ def update_table_schema(metadata: dict) -> None:
 
     # Construye un índice name -> descripción de columnas del LLM
     col_descriptions: dict[str, str] = {
-        col["name"]: col["description"]
-        for col in metadata.get("columns", [])
+        col["name"]: col["description"] for col in metadata.get("columns", [])
     }
 
     # Actualiza el schema campo por campo (preserva campos que el LLM no tocó)

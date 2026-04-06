@@ -1,6 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from google.cloud import bigquery
 import logging
+from fastapi import BackgroundTasks
+
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -15,9 +17,10 @@ from app.adapters.vertex_llm import generate_metadata
 from app.validators.metadata_schema import validate_metadata
 from app.models import TableMetadata, TableStatus
 from app.services.schema_updater import update_table_metadata
-
-# NUEVO: importar el writer de Dataplex para publicar los 3 aspects en /approve
-from app.services.dataplex_writer import upsert_dataplex_aspects
+from app.services.dataplex_writer import (
+    upsert_dataplex_aspects,
+    _publish_dataplex_background,
+)
 
 app = FastAPI(title="Metadata Generator API")
 
@@ -47,7 +50,9 @@ async def get_table_info(project: str, dataset: str, table: str) -> TableStatus:
     "/projects/{project}/datasets/{dataset}/tables/{table}/generate",
     response_model=TableMetadata,
 )
-def generate(project: str, dataset: str, table: str) -> TableMetadata:
+def generate(
+    project: str, dataset: str, table: str, background_tasks: BackgroundTasks
+) -> TableMetadata:
     """Genera las descripciones para la tabla. Revisar el JSON antes de aprobar."""
 
     table_fqn = f"{project.strip()}.{dataset.strip()}.{table.strip()}"
@@ -77,6 +82,14 @@ def generate(project: str, dataset: str, table: str) -> TableMetadata:
 
         update_table_metadata(table_fqn, payload)
         logger.info(f"Metadata actualizada en BigQuery para: {table_fqn}")
+
+        background_tasks.add_task(
+            _publish_dataplex_background,
+            payload,
+            table_fqn,
+        )
+
+        logger.info(f"[Generate] Publicación programada de Dataplex  para {table_fqn}")
 
         return payload
 
