@@ -79,9 +79,15 @@ def generate(
                 status_code=422,
                 detail={"error": "Invalid metadata schema", "details": errors},
             )
+        try:
+            update_table_metadata(table_fqn, payload)
+            logger.info(f"Metadata actualizada en BigQuery para: {table_fqn}")
+        except:
+            logger.warning(
+                f"[Generate] Sin permisos para actualizar BigQuery en {table_fqn}. "
+                f"Se continúa con Dataplex..."
+            )
 
-        update_table_metadata(table_fqn, payload)
-        logger.info(f"Metadata actualizada en BigQuery para: {table_fqn}")
 
         background_tasks.add_task(
             _publish_dataplex_background,
