@@ -80,6 +80,10 @@ def _aspect_type_resource(aspect_type_id: str) -> str:
     )
 
 
+def _aspect_map_key(aspect_type_id: str) -> str:
+    return f"{GOVERNANCE_PROJECT}.{DATAPLEX_LOCATION}.{aspect_type_id}"
+
+
 def _get_credentials():
     credentials, _ = google.auth.default(
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
@@ -141,9 +145,7 @@ def upsert_dataplex_aspects(payload: dict) -> DataplexWriteResult:
     }
 
     aspects_body = {
-        _aspect_type_resource(ASPECT_TYPE_DESCRIPTIONS): _build_descriptions_aspect(
-            payload
-        )
+        _aspect_map_key(ASPECT_TYPE_DESCRIPTIONS): _build_descriptions_aspect(payload)
     }
 
     url = f"{_DATAPLEX_API_BASE}/{entry_name}"
@@ -156,7 +158,7 @@ def upsert_dataplex_aspects(payload: dict) -> DataplexWriteResult:
             headers=headers,
             params=params,
             json=body,
-            timeout=30,
+            timeout=(5, 25),
         )
         response.raise_for_status()
 
