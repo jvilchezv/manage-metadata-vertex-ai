@@ -47,28 +47,46 @@ async def get_table_info(project: str, dataset: str, table: str) -> TableStatus:
     "/projects/{project}/datasets/{dataset}/tables/{table}/generate",
     response_model=TableMetadata,
 )
-async def generate(project: str, dataset: str, table: str) -> TableMetadata:
+def generate(project: str, dataset: str, table: str) -> TableMetadata:
     """Genera las descripciones para la tabla. Revisar el JSON antes de aprobar."""
+
+    table_fqn = f"{project.strip()}.{dataset.strip()}.{table.strip()}"
+
     try:
         client = bigquery.Client()
+
+        logger.info(f"Obteniendo metadata para: {table_fqn}")
         table_obj = get_table_metadata(project.strip(), dataset.strip(), table.strip())
+
+        logger.info(f"Metadata obtenida de BigQuery para: {table_fqn}")
         profile = build_profile(table=table_obj, bq_client=client)
+
+        logger.info(f"Profile construido para: {table_fqn}")
         prompt = build_prompt(table=table_obj, profile=profile)
+
+        logger.info(f"Prompt construido para: {table_fqn}")
         payload = generate_metadata(prompt)
 
+        logger.info(f"Metadata generada por LLM para: {table_fqn}")
         errors = validate_metadata(payload)
         if errors:
             raise HTTPException(
                 status_code=422,
                 detail={"error": "Invalid metadata schema", "details": errors},
             )
+
+        update_table_metadata(table_fqn, payload)
+        logger.info(f"Metadata actualizada en BigQuery para: {table_fqn}")
+
         return payload
 
-    except HTTPException:
-        raise
+    except HTTPException as he:
+        raise he
     except Exception:
-        logger.exception("Unhandled error generating metadata")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.exception(f"Error generating metadata for {table_fqn}")
+        raise HTTPException(
+            status_code=500, detail="Error interno al procesar la tabla"
+        )
 
 
 @app.post(
