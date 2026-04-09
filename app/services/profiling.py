@@ -76,23 +76,25 @@ def _build_profile_query(
     """
     sample_clause = f"TABLESAMPLE SYSTEM ({sample_percent} PERCENT)"
 
-    if partition_field and partition_bq_type in ("TIMESTAMP", "DATE", "DATETIME"):
-        cast_type = partition_bq_type
-
-        query = f"""
-        SELECT {cols_select_str}
-        FROM `{fq_table}` {sample_clause}
-        WHERE DATE_TRUNC(CAST(`{partition_field}` AS {cast_type}), MONTH)
-            = DATE_TRUNC(CAST(@max_partition AS {cast_type}), MONTH)
-        """
-
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("max_partition", cast_type, max_partition)
-            ]
-        )
-        return query, job_config
-
+    if partition_field:
+        if partition_bq_type in ("TIMESTAMP", "DATE", "DATETIME") and max_partition:
+            cast_type = partition_bq_type
+            query = f"""
+            SELECT {cols_select_str}
+            FROM `{fq_table}` {sample_clause}
+            WHERE DATE_TRUNC(CAST(`{partition_field}` AS {cast_type}), MONTH) 
+                = DATE_TRUNC(CAST(@max_partition AS {cast_type}), MONTH)
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("max_partition", cast_type, max_partition)
+                ]
+            )
+            return query, job_config
+        else:
+            query = f"SELECT {cols_select_str} FROM `{fq_table}` {sample_clause} WHERE `{partition_field}` IS NOT NULL"
+            return query, None
+            
     query = f"SELECT {cols_select_str} FROM `{fq_table}` {sample_clause}"
     return query, None
 
@@ -127,12 +129,10 @@ def build_profile(
         sample_percent=sample_percent,
     )
 
-    # OPTIMIZACIÓN: Añadimos un LIMIT para asegurar que quepa en 512MiB
     query += " LIMIT 50000"
 
     logger.debug(f"Profiling query:\n{query}")
 
-    # OPTIMIZACIÓN: No convertir a list(). Usar el iterador directamente.
     query_job = bq_client.query(query, job_config=job_config)
     rows_iter = query_job.result()
 
@@ -140,7 +140,8 @@ def build_profile(
     col_original: Dict[str, List[Any]] = {c: [] for c in all_cols}
     col_distinct_set: Dict[str, set] = {
         c: set() for c in all_cols
-    }  # Usar sets directamente
+    }
+    
     col_missing: Dict[str, int] = {c: 0 for c in all_cols}
     col_non_null_count: Dict[str, int] = {c: 0 for c in all_cols}
 
@@ -154,11 +155,9 @@ def build_profile(
 
             col_non_null_count[c] += 1
 
-            # Solo guardamos ejemplos hasta el límite (ahorro de RAM)
             if len(col_original[c]) < max_examples:
                 col_original[c].append(value)
 
-            # Guardamos el hash para el cálculo de distintos (ahorro de RAM vs guardar objeto completo)
             col_distinct_set[c].add(_normalize_for_hash(value))
 
     if total_rows == 0:
@@ -173,7 +172,6 @@ def build_profile(
         missing_count = col_missing[name]
         non_null_count = col_non_null_count[name]
 
-        # Deduplicar ejemplos para mostrar
         seen = set()
         dedup_display = []
         for v in examples:

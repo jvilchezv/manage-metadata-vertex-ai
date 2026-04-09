@@ -25,14 +25,23 @@ def get_partition_field(table: bigquery.Table) -> str:
     return ""
 
 
-def get_max_partition(client: bigquery.Client, fq_table: str, partition_field: str):
+def get_max_partition(client, fq_table, partition_field):
+    project, dataset, table = fq_table.split('.')
+    
     query = f"""
-    SELECT MAX({partition_field}) AS max_value
-    FROM `{fq_table}`
+    SELECT MAX(partition_id) as max_id
+    FROM `{project}.{dataset}.INFORMATION_SCHEMA.PARTITIONS`
+    WHERE table_name = '{table}' AND partition_id <> '__NULL__'
     """
-    logger.debug(f"Getting max partition with query: {query}")
-    result = client.query(query).result()
-    return next(result).max_value
+    
+    res = client.query(query).result()
+    row = next(res, None)
+    
+    if row and row.max_id:
+        mid = row.max_id
+        return f"{mid[:4]}-{mid[4:6]}-{mid[6:]}"
+    return None
+
 
 
 def get_table_status(client: bigquery.Client, project: str, dataset: str, table: str):
