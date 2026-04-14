@@ -23,6 +23,7 @@ def generate_metadata(prompt: str, retries: int = 2) -> dict:
                 config=types.GenerateContentConfig(
                     temperature=0.4,
                     response_mime_type="application/json",
+                    top_p=0.85,
                 ),
             )
 
