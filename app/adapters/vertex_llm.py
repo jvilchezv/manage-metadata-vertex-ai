@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = "gemini-1.5-flash"
+MODEL_NAME = "gemini-2.5-flash"
 
 client = genai.Client(vertexai=True)
 

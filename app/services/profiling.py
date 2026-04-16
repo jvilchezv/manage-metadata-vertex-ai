@@ -3,12 +3,16 @@ from google.cloud import bigquery
 import logging
 import base64
 import datetime
+import concurrent.futures
 import json
 from decimal import Decimal
 
 from app.adapters.bq_reader import get_partition_field, get_max_partition
 
 logger = logging.getLogger(__name__)
+
+MAX_COLUMNS_TO_PROFILE = 100  # Evita queries excesivamente pesadas en tablas muy anchas
+BQ_QUERY_TIMEOUT = 120  # Timeout máximo para la query de BigQuery (segundos)
 
 
 def _is_missing(value: Any) -> bool:
@@ -59,139 +63,163 @@ def _get_partition_bq_type(
     return None
 
 
-def _build_profile_query(
-    fq_table: str,
-    cols_select_str: str,
-    partition_field: str | None,
-    partition_bq_type: str | None,
-    max_partition: Any,
-    sample_percent: int,
-) -> tuple[str, bigquery.QueryJobConfig | None]:
-    """
-    Construye la query de perfilado con:
-    - TABLESAMPLE SYSTEM para muestrear ~sample_percent% de la tabla.
-    - Filtro DATE_TRUNC al mes más reciente si la tabla tiene partición por fecha.
-
-    Retorna (query_str, job_config_o_None).
-    """
-    sample_clause = f"TABLESAMPLE SYSTEM ({sample_percent} PERCENT)"
-
-    if partition_field:
-        if partition_bq_type in ("TIMESTAMP", "DATE", "DATETIME") and max_partition:
-            cast_type = partition_bq_type
-            query = f"""
-            SELECT {cols_select_str}
-            FROM `{fq_table}` {sample_clause}
-            WHERE DATE_TRUNC(CAST(`{partition_field}` AS {cast_type}), MONTH) 
-                = DATE_TRUNC(CAST(@max_partition AS {cast_type}), MONTH)
-            """
-            job_config = bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("max_partition", cast_type, max_partition)
-                ]
-            )
-            return query, job_config
-        else:
-            query = f"SELECT {cols_select_str} FROM `{fq_table}` {sample_clause} WHERE `{partition_field}` IS NOT NULL"
-            return query, None
-            
-    query = f"SELECT {cols_select_str} FROM `{fq_table}` {sample_clause}"
-    return query, None
-
-
 def build_profile(
     table: bigquery.Table,
     bq_client: bigquery.Client,
     max_examples: int = 10,
     sample_percent: int = 5,
 ) -> Dict[str, Dict]:
+    """
+    Calcula estadísticas y obtiene ejemplos delegando el procesamiento a BigQuery.
+    """
     fq_table = f"{table.project}.{table.dataset_id}.{table.table_id}"
-    logger.info(f"Profiling table: {fq_table} | sample={sample_percent}%")
 
-    all_cols = [f.name for f in table.schema]
-    if not all_cols:
-        return {}
-
-    cols_select_str = ", ".join([f"`{c}`" for c in all_cols])
     partition_field = get_partition_field(table)
     partition_bq_type = _get_partition_bq_type(table, partition_field)
     max_partition = None
-
     if partition_field and partition_bq_type in ("TIMESTAMP", "DATE", "DATETIME"):
         max_partition = get_max_partition(bq_client, fq_table, partition_field)
 
-    query, job_config = _build_profile_query(
-        fq_table=fq_table,
-        cols_select_str=cols_select_str,
-        partition_field=partition_field,
-        partition_bq_type=partition_bq_type,
-        max_partition=max_partition,
-        sample_percent=sample_percent,
-    )
+    # 1. Construir agregaciones por columna
+    stat_parts = []
+    profiled_column_names = []
 
-    query += " LIMIT 50000"
+    for f in table.schema[:MAX_COLUMNS_TO_PROFILE]:
+        # Filtrar solo campos simples (no STRUCT, no ARRAY/REPEATED, no JSON/GEOGRAPHY)
+        if f.mode == "REPEATED" or f.field_type in ("RECORD", "JSON", "GEOGRAPHY"):
+            continue
 
-    logger.debug(f"Profiling query:\n{query}")
+        name = f.name
+        profiled_column_names.append(name)
+        stat_parts.append(f"""
+            STRUCT(
+                COUNTIF(`{name}` IS NULL) as null_count,
+                APPROX_COUNT_DISTINCT(`{name}`) as dist_count,
+                COUNT(`{name}`) as non_null_count,
+                ARRAY_AGG(`{name}` IGNORE NULLS LIMIT {max_examples * 5}) as examples
+            ) as `{name}`
+        """)
 
-    query_job = bq_client.query(query, job_config=job_config)
-    rows_iter = query_job.result()
+    stats_select = ",\n".join(stat_parts)
 
+    # 2. Manejo de Partición y Muestreo
+    where_clause = "1=1"
+    job_config = None
+    if (
+        partition_field
+        and partition_bq_type in ("TIMESTAMP", "DATE", "DATETIME")
+        and max_partition
+    ):
+        where_clause = f"DATE_TRUNC(CAST(`{partition_field}` AS {partition_bq_type}), MONTH) = DATE_TRUNC(CAST(@max_partition AS {partition_bq_type}), MONTH)"
+        # Optimizamos: Filtramos por la partición exacta o el mes actual para activar el "Partition Pruning"
+        where_clause = (
+            f"`{partition_field}` >= CAST(@max_partition AS {partition_bq_type})"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter(
+                    "max_partition", partition_bq_type, max_partition
+                )
+            ]
+        )
+
+    def run_query(use_sample: bool):
+        sample = f"TABLESAMPLE SYSTEM ({sample_percent} PERCENT)" if use_sample else ""
+        query = f"SELECT COUNT(*) as total_rows, {stats_select} FROM `{fq_table}` {sample} WHERE {where_clause}"
+        return bq_client.query(query, job_config=job_config).result(
+            timeout=BQ_QUERY_TIMEOUT
+        )
+
+    # Intentar con muestreo, si falla o da 0, reintentar sin muestreo (para tablas pequeñas)
+    row = None
     total_rows = 0
-    col_original: Dict[str, List[Any]] = {c: [] for c in all_cols}
-    col_distinct_set: Dict[str, set] = {
-        c: set() for c in all_cols
-    }
-    
-    col_missing: Dict[str, int] = {c: 0 for c in all_cols}
-    col_non_null_count: Dict[str, int] = {c: 0 for c in all_cols}
 
-    for row in rows_iter:
-        total_rows += 1
-        for c in all_cols:
-            value = row[c]
-            if _is_missing(value):
-                col_missing[c] += 1
-                continue
+    try:
+        try:
+            # Intento 1: Estadísticas con muestreo sobre la partición
+            results = run_query(use_sample=True)
+            row = next(results)
+            total_rows = row.total_rows
+            # Si el muestreo devuelve 0 pero la tabla tiene datos, reintentar sin muestreo
+            if total_rows == 0 and getattr(table, "num_rows", 0) > 0:
+                results = run_query(use_sample=False)
+                row = next(results)
+                total_rows = row.total_rows
+        except (concurrent.futures.TimeoutError, TimeoutError):
+            logger.warning(
+                f"Timeout en muestreo para {fq_table}. Intentando sin sample sobre partición."
+            )
+            results = run_query(use_sample=False)
+            row = next(results)
+            total_rows = row.total_rows
+        except Exception as e:
+            logger.warning(
+                f"Error en muestreo para {fq_table}: {e}. Reintentando sin sample."
+            )
+            results = run_query(use_sample=False)
+            row = next(results)
+            total_rows = row.total_rows
 
-            col_non_null_count[c] += 1
+    except Exception as e:
+        logger.error(
+            f"No se pudieron obtener estadísticas para {fq_table}: {e}. Ejecutando fallback de ejemplos."
+        )
+        try:
+            fallback_query = (
+                f"SELECT * FROM `{fq_table}` WHERE {where_clause} LIMIT {max_examples}"
+            )
+            fallback_results = bq_client.query(
+                fallback_query, job_config=job_config
+            ).result(timeout=30)
+            fallback_rows = list(fallback_results)
+            if not fallback_rows:
+                return {}
 
-            if len(col_original[c]) < max_examples:
-                col_original[c].append(value)
+            profile = {}
+            for field in table.schema:
+                vals = [getattr(r, field.name, None) for r in fallback_rows]
+                profile[field.name] = {
+                    "type": field.field_type,
+                    "mode": field.mode,
+                    "bq_description": (field.description or "").strip(),
+                    "example_values": list(
+                        dict.fromkeys(_to_display(v) for v in vals if v is not None)
+                    )[:max_examples],
+                }
+            return profile
+        except Exception as fe:
+            logger.error(f"Fallback también falló para {fq_table}: {fe}")
+            return {}
 
-            col_distinct_set[c].add(_normalize_for_hash(value))
-
-    if total_rows == 0:
-        logger.warning(f"Sin filas para {fq_table}.")
+    if not row or total_rows == 0:
         return {}
 
-    profile: Dict[str, Dict] = {}
+    # 3. Formatear el perfil
+    profile = {}
     for field in table.schema:
-        name = field.name
-        examples = col_original[name]
-        distinct_count = len(col_distinct_set[name])
-        missing_count = col_missing[name]
-        non_null_count = col_non_null_count[name]
+        if field.name not in profiled_column_names:
+            continue
 
-        seen = set()
-        dedup_display = []
-        for v in examples:
-            key = _normalize_for_hash(v)
-            if key not in seen:
-                seen.add(key)
-                dedup_display.append(_to_display(v))
+        col_stats = row[field.name]
+        raw_examples = col_stats["examples"] or []
 
-        profile[name] = {
+        # Deduplicación eficiente en Python para no estresar a BigQuery con DISTINCT
+        display_examples = list(
+            dict.fromkeys(_to_display(ex) for ex in raw_examples if ex is not None)
+        )[:max_examples]
+
+        profile[field.name] = {
             "type": field.field_type,
             "mode": field.mode,
             "bq_description": (field.description or "").strip(),
-            "example_values": dedup_display,
-            "null_ratio": round(missing_count / total_rows, 3),
+            "example_values": display_examples,
+            "null_ratio": round(col_stats["null_count"] / total_rows, 3),
             "distinct_ratio": round(
-                distinct_count / non_null_count if non_null_count > 0 else 0.0, 3
+                col_stats["dist_count"] / col_stats["non_null_count"]
+                if col_stats["non_null_count"] > 0
+                else 0.0,
+                3,
             ),
         }
 
-    logger.info(
-        f"Perfilado completado: {len(profile)} columnas | {total_rows} filas procesadas"
-    )
     return profile
