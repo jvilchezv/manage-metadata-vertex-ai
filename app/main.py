@@ -34,7 +34,7 @@ async def health():
     "/projects/{project}/datasets/{dataset}/tables/{table}", response_model=TableStatus
 )
 async def get_table_info(project: str, dataset: str, table: str) -> TableStatus:
-    client = bigquery.Client()
+    client = bigquery.Client(project=project.strip())
     status = get_table_status(
         client=client,
         project=project.strip(),
@@ -58,10 +58,12 @@ def generate(
     table_fqn = f"{project.strip()}.{dataset.strip()}.{table.strip()}"
 
     try:
-        client = bigquery.Client()
+        client = bigquery.Client(project=project.strip())
 
         logger.info(f"Obteniendo metadata para: {table_fqn}")
-        table_obj = get_table_metadata(project.strip(), dataset.strip(), table.strip())
+        table_obj = get_table_metadata(
+            project.strip(), dataset.strip(), table.strip(), client
+        )
 
         logger.info(f"Metadata obtenida de BigQuery para: {table_fqn}")
         profile = build_profile(table=table_obj, bq_client=client)
@@ -80,14 +82,13 @@ def generate(
                 detail={"error": "Invalid metadata schema", "details": errors},
             )
         try:
-            update_table_metadata(table_fqn, payload)
+            update_table_metadata(table_fqn, payload, client)
             logger.info(f"Metadata actualizada en BigQuery para: {table_fqn}")
         except:
             logger.warning(
                 f"[Generate] Sin permisos para actualizar BigQuery en {table_fqn}. "
                 f"Se continúa con Dataplex..."
             )
-
 
         background_tasks.add_task(
             _publish_dataplex_background,
@@ -106,45 +107,3 @@ def generate(
         raise HTTPException(
             status_code=500, detail="Error interno al procesar la tabla"
         )
-
-
-@app.post(
-    "/projects/{project}/datasets/{dataset}/tables/{table}/approve",
-    response_model=TableMetadata,
-)
-async def approve(
-    project: str, dataset: str, table: str, payload: TableMetadata
-) -> TableMetadata:
-    """Recibe el JSON revisado por la persona y aplica las descripciones en BigQuery."""
-    try:
-        table_fqn = f"{project.strip()}.{dataset.strip()}.{table.strip()}"
-        update_table_metadata(table_fqn, payload.model_dump())
-        logger.info(f"[Approve] BigQuery actualizado para: {table_fqn}")
-
-        # ── Paso 2: Publicar en Dataplex ──────────────────────────────────────
-        # Construye y publica los 3 Aspect Types en Dataplex Catalog.
-        # Usa el mismo payload aprobado, no hace ninguna transformación previa.
-        dataplex_result = upsert_dataplex_aspects(payload.model_dump())
-
-        if dataplex_result.success:
-            logger.info(
-                f"[Approve] Dataplex actualizado para: {table_fqn}. "
-                f"Aspects: {dataplex_result.aspects_updated}"
-            )
-        else:
-            # Loguear el error pero retornar 200 igual — BigQuery ya se escribió
-            # y no queremos que el usuario tenga que re-aprobar por un fallo de Dataplex.
-            # El equipo de datos puede re-publicar en Dataplex manualmente si es necesario.
-            logger.error(
-                f"[Approve] Dataplex falló para {table_fqn}: {dataplex_result.errors}"
-            )
-
-        return payload
-
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("Unhandled error applying metadata")
-        raise HTTPException(status_code=500, detail="Internal server error")

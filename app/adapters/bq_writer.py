@@ -4,7 +4,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def update_table_schema(metadata: dict) -> None:
+def update_table_schema(metadata: dict, client: bigquery.Client) -> None:
     """
     Aplica las descripciones generadas por el LLM al schema de la tabla en BigQuery.
 
@@ -12,8 +12,6 @@ def update_table_schema(metadata: dict) -> None:
     """
 
     table_fqn = metadata["table_fqn"]
-    project_id = table_fqn.split(".")[0]
-    client = bigquery.Client(project=project_id)
 
     logger.info(f"Updating schema for table: {table_fqn}")
 
