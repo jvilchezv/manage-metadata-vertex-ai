@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 GOVERNANCE_PROJECT = os.getenv("GOVERNANCE_PROJECT")
 
-DATAPLEX_LOCATION = os.getenv("DATAPLEX_LOCATION", "us-east4")
+DATAPLEX_LOCATION = os.getenv("DATAPLEX_LOCATION", "us")
 
 ASPECT_TYPE_DESCRIPTIONS = os.getenv(
     "ASPECT_TYPE_DESCRIPTIONS", "custom-table-descriptions"
@@ -64,9 +64,7 @@ def _build_entry_name(bq_project: str, dataset: str, table: str) -> str:
     )
 
     entry_group = (
-        f"projects/{GOVERNANCE_PROJECT}"
-        f"/locations/{DATAPLEX_LOCATION}"
-        f"/entryGroups/@bigquery"
+        f"projects/{bq_project}/locations/{DATAPLEX_LOCATION}/entryGroups/@bigquery"
     )
 
     return f"{entry_group}/entries/{fqn_path}"

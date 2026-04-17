@@ -11,8 +11,8 @@ from app.adapters.bq_reader import get_partition_field, get_max_partition
 
 logger = logging.getLogger(__name__)
 
-MAX_COLUMNS_TO_PROFILE = 100  # Evita queries excesivamente pesadas en tablas muy anchas
-BQ_QUERY_TIMEOUT = 120  # Timeout máximo para la query de BigQuery (segundos)
+MAX_COLUMNS_TO_PROFILE = 100
+BQ_QUERY_TIMEOUT = 120
 
 
 def _is_missing(value: Any) -> bool:
@@ -57,6 +57,10 @@ def _get_partition_bq_type(
     """Obtiene el tipo BigQuery del campo de partición directamente desde el schema."""
     if not partition_field_name:
         return None
+    if partition_field_name == "_PARTITIONDATE":
+        return "DATE"
+    if partition_field_name == "_PARTITIONTIME":
+        return "TIMESTAMP"
     for f in table.schema:
         if f.name == partition_field_name:
             return f.field_type.upper()
@@ -110,16 +114,11 @@ def build_profile(
         and partition_bq_type in ("TIMESTAMP", "DATE", "DATETIME")
         and max_partition
     ):
-        where_clause = f"DATE_TRUNC(CAST(`{partition_field}` AS {partition_bq_type}), MONTH) = DATE_TRUNC(CAST(@max_partition AS {partition_bq_type}), MONTH)"
         # Optimizamos: Filtramos por la partición exacta o el mes actual para activar el "Partition Pruning"
-        where_clause = (
-            f"`{partition_field}` >= CAST(@max_partition AS {partition_bq_type})"
-        )
+        where_clause = f"DATE_TRUNC(DATE(`{partition_field}`), MONTH) = DATE_TRUNC(@max_partition, MONTH)".strip()
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter(
-                    "max_partition", partition_bq_type, max_partition
-                )
+                bigquery.ScalarQueryParameter("max_partition", "DATE", max_partition)
             ]
         )
 
