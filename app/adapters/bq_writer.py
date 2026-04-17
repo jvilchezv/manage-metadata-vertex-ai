@@ -3,8 +3,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-client = bigquery.Client()
-
 
 def update_table_schema(metadata: dict) -> None:
     """
@@ -12,7 +10,11 @@ def update_table_schema(metadata: dict) -> None:
 
     - metadata: dict validado con la estructura de TableMetadata
     """
+
     table_fqn = metadata["table_fqn"]
+    project_id = table_fqn.split(".")[0]
+    client = bigquery.Client(project=project_id)
+
     logger.info(f"Updating schema for table: {table_fqn}")
 
     table = client.get_table(table_fqn)
