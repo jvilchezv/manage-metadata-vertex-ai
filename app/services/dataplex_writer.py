@@ -25,7 +25,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-GOVERNANCE_PROJECT = os.getenv("GOVERNANCE_PROJECT")
+GOVERNANCE_PROJECT = os.getenv("PROJECT_ID")
 
 DATAPLEX_LOCATION = os.getenv("DATAPLEX_LOCATION", "us")
 
