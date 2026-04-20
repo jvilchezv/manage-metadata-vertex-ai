@@ -84,8 +84,8 @@ echo "▶ Desplegando Cloud Run Job..."
 echo "  Tasks totales:      ${TASK_COUNT}  (${TASK_COUNT} slices de ~350 tablas)"
 echo "  Tasks en paralelo:  ${PARALLELISM} (las otras esperan turno)"
 echo "  Vertex concurrency: ${VERTEX_CONCURRENCY} por task"
-echo "  RPM pico estimado:  $((PARALLELISM * VERTEX_CONCURRENCY * 4)) RPM (con LLM a 15s)"
-echo "  RPM sostenido:      $((PARALLELISM * VERTEX_CONCURRENCY * 2)) RPM (con LLM a 25-30s)"
+echo "  RPM pico estimado:  $((PARALLELISM * VERTEX_CONCURRENCY * 4))"
+echo "  RPM sostenido:      $((PARALLELISM * VERTEX_CONCURRENCY * 2))"
 echo ""
 
 gcloud run jobs deploy "${JOB_NAME}" \
