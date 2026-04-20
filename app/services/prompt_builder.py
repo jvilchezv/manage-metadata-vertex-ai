@@ -118,7 +118,7 @@ Si desc_bq está presente:
 
 6) NULOS ALTOS
 Si null_ratio >= 0.50 (solo para campos), la descripción debe terminar EXACTAMENTE con:
-"Utilizada principalmente para segmentos u agrupaciones específicas."
+"Campo utilizado principalmente para segmentos u agrupaciones específicas."
 
 No expliques causas ni contexto.
 
