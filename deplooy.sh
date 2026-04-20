@@ -74,7 +74,8 @@ TIMEOUT="7200s"
 echo "▶ Build & push imagen: ${IMAGE}"
 gcloud builds submit \
   --tag "${IMAGE}" \
-  --project "${PROJECT_ID}"
+  --project "${PROJECT_ID}" \
+  --region "${REGION}"
 
 # =============================================================================
 # DEPLOY
@@ -102,7 +103,8 @@ gcloud run jobs deploy "${JOB_NAME}" \
 TRACKER_TABLE_FQN=${TRACKER_TABLE_FQN},\
 MAX_WORKERS=${MAX_WORKERS},\
 VERTEX_CONCURRENCY=${VERTEX_CONCURRENCY},\
-LLM_RETRIES=${LLM_RETRIES}"
+LLM_RETRIES=${LLM_RETRIES},\
+PROJECT_ID=${PROJECT_ID}"
 
 echo ""
 echo "✅ Job desplegado: ${JOB_NAME}"

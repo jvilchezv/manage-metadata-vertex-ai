@@ -48,10 +48,6 @@ def process_table(
         # 3. Prompt
         prompt = build_prompt(table=table_obj, profile=profile)
 
-        # Protección (muy importante)
-        if len(prompt) > 20000:
-            raise ValueError("PROMPT_TOO_LARGE")
-
         # 4. LLM
         payload = generate_metadata(prompt)
 
@@ -88,8 +84,6 @@ def process_table(
         # Clasificación de errores
         if "429" in error_msg or "ResourceExhausted" in error_msg:
             error_type = "RATE_LIMIT"
-        elif "PROMPT_TOO_LARGE" in error_msg:
-            error_type = "PROMPT"
         elif isinstance(e, MetadataValidationError):
             error_type = "VALIDATION"
         else:
