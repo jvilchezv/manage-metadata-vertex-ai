@@ -36,13 +36,12 @@ def claim_pending_tables(
     claim_query = f"""
         UPDATE `{tracker_table}`
         SET
-            estado     = 'PROCESSING',
             job_id     = @job_id,
+            estado     = 'PROCESSING',
             updated_at = CURRENT_TIMESTAMP()
         WHERE
-            -- Doble filtro: el subquery QUALIFY fija el set ordenado,
-            -- el AND externo es la segunda barrera contra race conditions
-            estado != 'PROCESSING'
+            (estado IS NULL OR estado = 'ERROR')
+            AND job_id IS NULL
             AND STRUCT(catalog, schema, `table`) IN (
                 SELECT AS STRUCT catalog, schema, `table`
                 FROM `{tracker_table}`
