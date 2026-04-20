@@ -8,8 +8,12 @@ ENV="nprdd"
 PREFIX="rs-${ENV}-ue4-gcf"
 PROJECT_ID="rs-nprd-dlk-dd-trsv-ede4"
 REGION="us-central1"
+
 JOB_NAME="${PREFIX}-metadata-generator"
-IMAGE="gcr.io/${PROJECT_ID}/${JOB_NAME}:$(date +%Y%m%d-%H%M%S)"
+
+REPO="metadata-jobs"
+IMAGE="${PROJECT_ID}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${JOB_NAME}:$(date +%Y%m%d-%H%M%S)"
+
 SERVICE_ACCOUNT="sa-nprd-dd-gob-dataplex-deploy@rs-nprd-dlk-dd-trsv-ede4.iam.gserviceaccount.com"
 TRACKER_TABLE_FQN="${PROJECT_ID}.trsv_delivery_calidad.tablas_mdm"
 
@@ -61,17 +65,34 @@ LLM_RETRIES=3
 
 # =============================================================================
 # RUNTIME
-# 2 CPU es suficiente para I/O bound con 10 workers.
-# El cuello de botella es Vertex AI, no el CPU del container.
 # =============================================================================
 CPU="2"
 MEMORY="2Gi"
 TIMEOUT="7200s"
 
+echo "▶ Verificando Artifact Registry..."
+
+if ! gcloud artifacts repositories describe "${REPO}" \
+  --location="${REGION}" \
+  --project="${PROJECT_ID}" >/dev/null 2>&1; then
+
+  echo "⚠️  Repo no existe. Creando ${REPO} en ${REGION}..."
+
+  gcloud artifacts repositories create "${REPO}" \
+    --repository-format=docker \
+    --location="${REGION}" \
+    --description="Docker repo metadata jobs" \
+    --project="${PROJECT_ID}"
+fi
+
+echo "▶ Configurando auth Docker..."
+gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
 # =============================================================================
 # BUILD
 # =============================================================================
 echo "▶ Build & push imagen: ${IMAGE}"
+
 gcloud builds submit \
   --tag "${IMAGE}" \
   --project "${PROJECT_ID}" \
