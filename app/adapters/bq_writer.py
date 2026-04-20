@@ -24,17 +24,9 @@ def update_table_schema(metadata: dict, client: bigquery.Client) -> None:
     schema_changed = False
 
     for field in table.schema:
-        if field.field_type == "RECORD":
-            new_schema.append(field)
-            continue
+        field_dict = _strip_policy_tags(field.to_api_repr())
 
-        field_dict = field.to_api_repr()
-
-        # Eliminar policyTags del payload — BigQuery los preserva en backend
-        # sin necesidad de incluirlos en el update.
-        field_dict.pop("policyTags", None)
-
-        if field.name in col_descriptions:
+        if field.field_type != "RECORD" and field.name in col_descriptions:
             new_desc = col_descriptions[field.name]
             if (field.description or "") != new_desc:
                 field_dict["description"] = new_desc
@@ -52,3 +44,18 @@ def update_table_schema(metadata: dict, client: bigquery.Client) -> None:
     table.description = new_table_description
     client.update_table(table, ["schema", "description"])
     logger.info(f"Descripciones actualizadas para: {table_fqn}")
+
+
+def _strip_policy_tags(field_dict: dict) -> dict:
+    """
+    Elimina policyTags recursivamente en todos los niveles del schema.
+    Cubre campos simples, RECORD y subfields anidados a cualquier profundidad.
+    """
+    field_dict.pop("policyTags", None)
+
+    if "fields" in field_dict:
+        field_dict["fields"] = [
+            _strip_policy_tags(subfield) for subfield in field_dict["fields"]
+        ]
+
+    return field_dict
