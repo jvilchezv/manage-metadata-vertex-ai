@@ -4,9 +4,9 @@ set -euo pipefail
 # =============================================================================
 # CONFIG BASE
 # =============================================================================
-ENV="nprdd"
+ENV="nprdt"
 PREFIX="rs-${ENV}-ue4-gcf"
-PROJECT_ID="rs-nprd-dlk-dd-trsv-ede4"
+PROJECT_ID="rs-nprd-dlk-dt-trsv-digt-f7ef"
 REGION="us-central1"
 
 JOB_NAME="${PREFIX}-metadata-generator"
@@ -15,8 +15,8 @@ JOB_NAME="${PREFIX}-metadata-generator"
 REPO="gcr-metadata-jobs"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${JOB_NAME}:$(date +%Y%m%d-%H%M%S)"
 
-SERVICE_ACCOUNT="sa-nprd-dd-gob-dataplex-deploy@rs-nprd-dlk-dd-trsv-ede4.iam.gserviceaccount.com"
-TRACKER_TABLE_FQN="${PROJECT_ID}.trsv_delivery_calidad.tablas_mdm"
+SERVICE_ACCOUNT="sa-nprd-dt-gob-dataplex-deploy@rs-nprd-dlk-dt-trsv-digt-f7ef.iam.gserviceaccount.com"
+TRACKER_TABLE_FQN="${PROJECT_ID}.trsv_monitoreo.tablas_mdm"
 
 TASK_COUNT=10
 PARALLELISM=5
@@ -27,8 +27,8 @@ LLM_RETRIES=3
 # =============================================================================
 # RUNTIME
 # =============================================================================
-CPU="2"
-MEMORY="2Gi"
+CPU="4"
+MEMORY="4Gi"
 TIMEOUT="7200s"
 
 echo "▶ Verificando Artifact Registry..."

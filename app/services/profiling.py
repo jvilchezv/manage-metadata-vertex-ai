@@ -11,7 +11,7 @@ from app.adapters.bq_reader import get_partition_field, get_max_partition
 
 logger = logging.getLogger(__name__)
 
-MAX_COLUMNS_TO_PROFILE = 100
+MAX_COLUMNS_TO_PROFILE = 200
 BQ_QUERY_TIMEOUT = 120
 
 
