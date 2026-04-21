@@ -6,36 +6,18 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
-MIN_ACCURACY = 0.65
+MIN_ACCURACY = 0.7
 
 
 def _clone_field_preserving_all(
     field: bigquery.SchemaField, *, description: str
 ) -> bigquery.SchemaField:
-    """
-    Clona un SchemaField preservando TODOS sus atributos (incluye policyTags / data masking)
-    y cambia únicamente la descripción.
-    """
-    d = (
-        field.to_api_repr()
-    )  # incluye policyTags, precision/scale, defaults, collation, etc.
+    d = field.to_api_repr()
     d["description"] = description
     return bigquery.SchemaField.from_api_repr(d)
 
 
 def update_table_schema(metadata: Dict[str, Any], client: bigquery.Client) -> None:
-    """
-    Actualiza:
-      - La descripción de la tabla (metadata["table_description"]["description"])
-      - Las descripciones SOLO de los campos top-level presentes en metadata["columns"]
-        con accuracy >= MIN_ACCURACY (0.8).
-
-    Garantías:
-      - No toca campos que no estén en el JSON.
-      - No toca campos RECORD (ni sus subcampos).
-      - Preserva data masking (policy_tags) en todos los campos.
-      - No llama a la API si no hay cambios reales.
-    """
     table_fqn = (metadata.get("table_fqn") or "").strip()
     if not table_fqn:
         raise ValueError(
@@ -46,7 +28,6 @@ def update_table_schema(metadata: Dict[str, Any], client: bigquery.Client) -> No
 
     table = client.get_table(table_fqn)
 
-    # --- Descripción de la tabla ---
     new_table_description = (
         (metadata.get("table_description") or {}).get("description") or ""
     ).strip()
@@ -62,7 +43,6 @@ def update_table_schema(metadata: Dict[str, Any], client: bigquery.Client) -> No
         )
         table.description = new_table_description
 
-    # --- Mapa de columnas a actualizar (solo las del JSON con accuracy suficiente) ---
     columns = metadata.get("columns") or []
     if not isinstance(columns, list):
         raise ValueError(
@@ -88,12 +68,10 @@ def update_table_schema(metadata: Dict[str, Any], client: bigquery.Client) -> No
                 MIN_ACCURACY,
             )
 
-    # --- Actualizar solo campos presentes en col_descriptions ---
     new_schema: List[bigquery.SchemaField] = []
     schema_changed = False
 
     for field in table.schema:
-        # RECORD: se pasa tal cual, sin tocar subcampos ni reconstruir
         if field.field_type != "RECORD" and field.name in col_descriptions:
             new_desc = col_descriptions[field.name]
             old_desc = (field.description or "").strip()
@@ -103,15 +81,12 @@ def update_table_schema(metadata: Dict[str, Any], client: bigquery.Client) -> No
                 field = _clone_field_preserving_all(field, description=new_desc)
                 schema_changed = True
 
-        # Si no está en el JSON o es RECORD, se agrega tal cual (NO se toca)
         new_schema.append(field)
 
-    # --- Early exit si no hubo cambios ---
     if not schema_changed and not table_desc_changed:
         logger.info("Sin cambios detectados para: %s", table_fqn)
         return
 
-    # --- Aplicar cambios ---
     update_fields: List[str] = []
     if schema_changed:
         table.schema = new_schema
