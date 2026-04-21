@@ -51,10 +51,8 @@ def update_table_schema(metadata: Dict[str, Any], client: bigquery.Client) -> No
         (metadata.get("table_description") or {}).get("description") or ""
     ).strip()
     current_table_description = (table.description or "").strip()
-    print(current_table_description)
     table_desc_changed = current_table_description != new_table_description
     print(table_desc_changed)
-    print(new_table_description)
 
     if table_desc_changed:
         logger.info(
